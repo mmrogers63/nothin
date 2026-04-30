@@ -1,63 +1,58 @@
 # Rapid Threat Modeling Rubric
 
-> This is a pre-dev planning tool — run it when you are scoping a change, not after you have written the code. The point is to catch security questions early enough to actually do something about them. If your change is big enough to need an SIA, use that instead.
+> Run this during planning when you are building something with real security surface area. Not every change needs it — the goal is to catch the ones that actually introduce risk before dev starts. If the scope is big enough to warrant an SIA, use that instead.
 
 ---
 
-## Does This Apply to Your Change?
+## Does This Need a Threat Model?
 
-If your change touches any of the below, run this rubric:
+Run this rubric if your change does any of the following:
 
-- Auth, session management, or any kind of permission check
-- PII or PHI — anything tied to a person or their health
-- Where data is stored or how it moves (new DB columns, new API calls, queues, etc.)
-- External APIs, SDKs, or third-party services
-- Anything that takes user input (forms, file uploads, URL params, headers)
-- Secrets, keys, or any crypto logic
-- Logging — what gets written and where
+- Adds or changes how users authenticate, get authorized, or manage sessions
+- Introduces a new flow that creates, moves, or stores PII or PHI
+- Exposes a new endpoint or significantly changes how an existing one behaves
+- Integrates a new external service, API, or SDK that touches sensitive data
+- Changes how secrets, keys, or encryption are handled
+- Meaningfully changes what gets logged or where logs go
 
-If none of that applies, you are probably fine to skip it. When in doubt, run it anyway.
+Tweaks, bug fixes, copy changes, refactors that do not touch the above — skip it.
 
 ---
 
 ## Work Through These Before You Build
 
-You do not need every answer locked down, but any "I don't know" is a risk that needs a decision before dev starts.
+Any "I don't know" is a risk that needs a decision before dev starts.
 
 ### What does this change actually touch?
 
-- What is this change supposed to do?
+- What is this supposed to do?
 - What PII or PHI does it create, read, update, or delete?
-- Where does that data live — database, cache, file storage, a third-party system?
-- Where does it travel — API calls, queues, emails, logs?
+- Where does that data live and where does it travel?
 
 ### Who can do what?
 
-- Who is this feature for?
-- What should they be able to access, and what should they definitely not?
+- Who is this for, and what should they explicitly not be able to access?
 - Are there multiple roles or tenants? How is their data kept separate?
 - What happens if an unauthenticated user hits this?
 
 ### What is coming in from users or outside systems?
 
-- What inputs are you accepting?
-- Where does that data end up — a query, a template, an external API call, a file?
-- If you are handling file uploads, what types and sizes are you actually allowing?
+- What inputs are you accepting and where do they end up?
+- If you are handling file uploads, what types and sizes are you allowing?
 
 ### How are secrets and sensitive data handled?
 
-- Do you need new API keys, tokens, or credentials? Where are they going to live?
+- Do you need new credentials? Where will they live?
 - Does sensitive data need to be encrypted at rest or in transit?
-- Are you doing any crypto work? What algorithm and why?
 
 ### Anything coming in from outside?
 
-- Adding any new libraries or SDKs?
-- If PII or PHI is going to a third party, is there a DPA or BAA already in place?
+- Adding new libraries or SDKs?
+- If PII or PHI is going to a third party, is there a DPA or BAA in place?
 
 ### Logging?
 
-- What security-relevant events should be getting logged (auth, access to sensitive data, admin actions)?
+- What security-relevant events should be logged?
 - Any chance PII or PHI ends up in the logs?
 
 ### What does failure look like?
@@ -71,22 +66,22 @@ You do not need every answer locked down, but any "I don't know" is a risk that 
 
 | Result | Action |
 |---|---|
-| Everything answered, no open questions | Good to go — document it and attach to the ticket |
-| 1-2 open questions | Resolve before dev starts, or flag async to AppSec |
-| 3+ open questions | Get AppSec in on planning before any work kicks off |
-| Any "I don't know" on data, access control, or third parties | That is a risk — get an answer before scoping is final |
+| Everything answered, no open questions | Good to go — document and attach to the ticket |
+| 1-2 open questions | Resolve before dev starts, or flag async to ITSC |
+| 3+ open questions | Get ITSC in on planning before work kicks off |
+| Any "I don't know" on data handling, access control, or third parties | Get an answer before scoping is final |
 
 ---
 
-## Looping in AppSec
+## Looping in ITSC
 
 When you reach out, include:
 
 - What you are planning to build (one or two sentences)
-- Which questions above are unresolved
+- Which questions are unresolved
 - Any timeline constraints
 
-**Channel:** `#appsec-review` | **Async:** 1 business day | **Sync:** scheduled within 2 business days
+**Channel:** `#itsc-review` | **Async:** 1 business day | **Sync:** scheduled within 2 business days
 
 ---
 
@@ -94,12 +89,12 @@ When you reach out, include:
 
 | | This Rubric | Security Impact Analysis |
 |---|---|---|
-| **Use for** | Tactical feature and code-level changes | Major changes — new systems, new data categories, architecture shifts |
+| **Use for** | Changes with real security surface area | Major changes — new systems, new data categories, architecture shifts |
 | **When** | Planning and ticket scoping | Design and discovery |
-| **Who drives it** | Dev or tech lead, AppSec on escalation | AppSec-led, cross-functional |
+| **Who drives it** | Dev or tech lead, ITSC on escalation | ITSC-led, cross-functional |
 
-Not sure which one to use? Start here. AppSec will tell you if it needs to go to an SIA.
+Not sure which one applies? Start here. ITSC will tell you if it needs to go to an SIA.
 
 ---
 
-*Owner: AppSec | Review cadence: Annual | Version: 1.0 | Last reviewed: [DATE]*
+*Owner: ITSC | Review cadence: Annual | Version: 1.0 | Last reviewed: [DATE]*
