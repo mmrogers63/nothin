@@ -1,123 +1,125 @@
 #!/bin/bash
 # =============================================================================
-# STIG Hardening Verification Script for Debian 13 Slim Container
-# Covers CAT I (High) and CAT II (Medium) severity checks
-# Based on DISA GPOS SRG - applicable to Debian in absence of OS-specific STIG
-# Run with: bash stig_check.sh
+# STIG CAT I & CAT II Verification - Debian 13 Container
+# Container-applicable checks only. No inherited/host controls.
+# Binary PASS/FAIL only. Run with: bash stig_check.sh
 # =============================================================================
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 BOLD='\033[1m'
 NC='\033[0m'
 
 PASS=0
 FAIL=0
-NA=0
-WARN=0
+REPORT="/tmp/stig_$(date +%Y%m%d_%H%M%S).txt"
 
-REPORT_FILE="/tmp/stig_report_$(date +%Y%m%d_%H%M%S).txt"
-
-log()    { echo -e "$1" | tee -a "$REPORT_FILE"; }
+log()    { echo -e "$1" | tee -a "$REPORT"; }
 pass()   { log "${GREEN}[PASS]${NC} [$1] $2"; PASS=$((PASS + 1)); }
 fail()   { log "${RED}[FAIL]${NC} [$1] $2"; FAIL=$((FAIL + 1)); }
-na()     { log "${YELLOW}[N/A] ${NC} [$1] $2 ${YELLOW}(host-inherited)${NC}"; NA=$((NA + 1)); }
-warn()   { log "${YELLOW}[WARN]${NC} [$1] $2"; WARN=$((WARN + 1)); }
-header() { log "\n${BLUE}${BOLD}======================================================================"; \
-           log " $1"; \
-           log "======================================================================${NC}"; }
+header() { log "\n${BLUE}${BOLD}=== $1 ===${NC}"; }
 
 log "${BOLD}"
-log "======================================================================"
-log "  STIG Hardening Verification - CAT I & CAT II"
-log "  Host    : $(hostname)"
-log "  Date    : $(date)"
-log "  OS      : $(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '\"')"
-log "  Kernel  : $(uname -r)"
-log "  User    : $(id)"
-log "======================================================================"
+log "========================================================"
+log "  STIG CAT I & II - Container Verification"
+log "  Date : $(date)"
+log "  OS   : $(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '\"')"
+log "  User : $(id)"
+log "========================================================"
 log "${NC}"
 
-# =============================================================================
-header "CAT I - ACCOUNT MANAGEMENT"
-# =============================================================================
+header "CAT I - ACCOUNTS"
 
-# SRG-OS-000104-GPOS-00051 - No non-root UID 0 accounts
 UID0=$(awk -F: '$3 == 0 && $1 != "root" {print $1}' /etc/passwd 2>/dev/null)
 if [ -z "$UID0" ]; then
     pass "CAT-I SRG-OS-000104" "No non-root accounts with UID 0"
 else
-    fail "CAT-I SRG-OS-000104" "Non-root accounts with UID 0 found: $UID0"
+    fail "CAT-I SRG-OS-000104" "Non-root accounts with UID 0: $UID0"
 fi
 
-# SRG-OS-000106-GPOS-00053 - No empty passwords
-EMPTY_PASS=$(awk -F: '($2 == "" || $2 == "!!" || $2 == "!") && $1 != "" {print $1}' /etc/shadow 2>/dev/null)
-if [ -z "$EMPTY_PASS" ]; then
+EMPTY=$(awk -F: '($2 == "" || $2 == "!!" || $2 == "!") {print $1}' /etc/shadow 2>/dev/null)
+if [ -z "$EMPTY" ]; then
     pass "CAT-I SRG-OS-000106" "No accounts with empty or null passwords"
 else
-    fail "CAT-I SRG-OS-000106" "Accounts with empty/null passwords: $EMPTY_PASS"
+    fail "CAT-I SRG-OS-000106" "Accounts with empty/null passwords: $EMPTY"
 fi
 
-# SRG-OS-000109-GPOS-00056 - Root login restricted
-ROOT_SHELL=$(grep "^root:" /etc/passwd 2>/dev/null | cut -d: -f7)
-if [ "$ROOT_SHELL" = "/sbin/nologin" ] || [ "$ROOT_SHELL" = "/bin/false" ] || [ "$ROOT_SHELL" = "/usr/sbin/nologin" ]; then
-    pass "CAT-I SRG-OS-000109" "Root login shell is restricted ($ROOT_SHELL)"
+ROOT_SHELL=$(grep "^root:" /etc/passwd | cut -d: -f7)
+if [ "$ROOT_SHELL" = "/sbin/nologin" ] || [ "$ROOT_SHELL" = "/usr/sbin/nologin" ] || [ "$ROOT_SHELL" = "/bin/false" ]; then
+    pass "CAT-I SRG-OS-000109" "Root shell is restricted: $ROOT_SHELL"
 else
-    warn "CAT-I SRG-OS-000109" "Root shell is $ROOT_SHELL - lock root if not needed in container"
+    fail "CAT-I SRG-OS-000109" "Root shell is $ROOT_SHELL (must be /sbin/nologin or /bin/false)"
 fi
 
-# NIS entries
-if ! grep -q '^+' /etc/passwd 2>/dev/null; then
+if grep -q '^+' /etc/passwd 2>/dev/null; then
+    fail "CAT-I SRG-OS-000104" "NIS '+' entries in /etc/passwd"
+else
     pass "CAT-I SRG-OS-000104" "No NIS '+' entries in /etc/passwd"
-else
-    fail "CAT-I SRG-OS-000104" "NIS '+' entries found in /etc/passwd"
 fi
 
-if ! grep -q '^+' /etc/shadow 2>/dev/null; then
+if grep -q '^+' /etc/shadow 2>/dev/null; then
+    fail "CAT-I SRG-OS-000104" "NIS '+' entries in /etc/shadow"
+else
     pass "CAT-I SRG-OS-000104" "No NIS '+' entries in /etc/shadow"
-else
-    fail "CAT-I SRG-OS-000104" "NIS '+' entries found in /etc/shadow"
 fi
 
-if ! grep -q '^+' /etc/group 2>/dev/null; then
+if grep -q '^+' /etc/group 2>/dev/null; then
+    fail "CAT-I SRG-OS-000104" "NIS '+' entries in /etc/group"
+else
     pass "CAT-I SRG-OS-000104" "No NIS '+' entries in /etc/group"
-else
-    fail "CAT-I SRG-OS-000104" "NIS '+' entries found in /etc/group"
 fi
 
-# =============================================================================
+BADFILES=$(find /home /root -maxdepth 2 \( -name ".rhosts" -o -name ".netrc" -o -name ".shosts" \) 2>/dev/null)
+if [ -z "$BADFILES" ]; then
+    pass "CAT-I SRG-OS-000015" "No .rhosts/.netrc/.shosts files found"
+else
+    fail "CAT-I SRG-OS-000015" "Dangerous files found: $BADFILES"
+fi
+
 header "CAT I - FILE PERMISSIONS"
-# =============================================================================
 
-# /etc/passwd
-PERM=$(stat -c "%a" /etc/passwd 2>/dev/null)
-OWN=$(stat -c "%U:%G" /etc/passwd 2>/dev/null)
-[ "$PERM" = "644" ] && pass "CAT-I SRG-OS-000257" "/etc/passwd permissions: $PERM" || fail "CAT-I SRG-OS-000257" "/etc/passwd permissions: $PERM (expected 644)"
-[ "$OWN" = "root:root" ] && pass "CAT-I SRG-OS-000257" "/etc/passwd owner: $OWN" || fail "CAT-I SRG-OS-000257" "/etc/passwd owner: $OWN (expected root:root)"
+check_perm() {
+    local file=$1 expected_perm=$2 expected_own=$3 stig=$4
+    if [ ! -e "$file" ]; then
+        fail "CAT-I $stig" "$file does not exist"
+        return
+    fi
+    local perm own
+    perm=$(stat -c "%a" "$file" 2>/dev/null)
+    own=$(stat -c "%U:%G" "$file" 2>/dev/null)
+    if [ "$perm" = "$expected_perm" ]; then
+        pass "CAT-I $stig" "$file permissions: $perm"
+    else
+        fail "CAT-I $stig" "$file permissions: $perm (expected $expected_perm)"
+    fi
+    if [ "$own" = "$expected_own" ]; then
+        pass "CAT-I $stig" "$file owner: $own"
+    else
+        fail "CAT-I $stig" "$file owner: $own (expected $expected_own)"
+    fi
+}
 
-# /etc/shadow
-PERM=$(stat -c "%a" /etc/shadow 2>/dev/null)
-OWN=$(stat -c "%U:%G" /etc/shadow 2>/dev/null)
-if [ "$PERM" = "640" ] || [ "$PERM" = "600" ] || [ "$PERM" = "000" ]; then
-    pass "CAT-I SRG-OS-000257" "/etc/shadow permissions: $PERM"
+check_perm "/etc/passwd" "644" "root:root" "SRG-OS-000257"
+check_perm "/etc/group"  "644" "root:root" "SRG-OS-000257"
+
+if [ -f /etc/shadow ]; then
+    PERM=$(stat -c "%a" /etc/shadow 2>/dev/null)
+    OWN=$(stat -c "%U:%G" /etc/shadow 2>/dev/null)
+    if [ "$PERM" = "640" ] || [ "$PERM" = "600" ] || [ "$PERM" = "000" ]; then
+        pass "CAT-I SRG-OS-000257" "/etc/shadow permissions: $PERM"
+    else
+        fail "CAT-I SRG-OS-000257" "/etc/shadow permissions: $PERM (expected 640 or stricter)"
+    fi
+    if [ "$OWN" = "root:shadow" ] || [ "$OWN" = "root:root" ]; then
+        pass "CAT-I SRG-OS-000257" "/etc/shadow owner: $OWN"
+    else
+        fail "CAT-I SRG-OS-000257" "/etc/shadow owner: $OWN (expected root:shadow or root:root)"
+    fi
 else
-    fail "CAT-I SRG-OS-000257" "/etc/shadow permissions: $PERM (expected 640 or stricter)"
-fi
-if [ "$OWN" = "root:shadow" ] || [ "$OWN" = "root:root" ]; then
-    pass "CAT-I SRG-OS-000257" "/etc/shadow owner: $OWN"
-else
-    fail "CAT-I SRG-OS-000257" "/etc/shadow owner: $OWN (expected root:shadow or root:root)"
+    fail "CAT-I SRG-OS-000257" "/etc/shadow does not exist"
 fi
 
-# /etc/group
-PERM=$(stat -c "%a" /etc/group 2>/dev/null)
-OWN=$(stat -c "%U:%G" /etc/group 2>/dev/null)
-[ "$PERM" = "644" ] && pass "CAT-I SRG-OS-000257" "/etc/group permissions: $PERM" || fail "CAT-I SRG-OS-000257" "/etc/group permissions: $PERM (expected 644)"
-[ "$OWN" = "root:root" ] && pass "CAT-I SRG-OS-000257" "/etc/group owner: $OWN" || fail "CAT-I SRG-OS-000257" "/etc/group owner: $OWN (expected root:root)"
-
-# /etc/gshadow
 if [ -f /etc/gshadow ]; then
     PERM=$(stat -c "%a" /etc/gshadow 2>/dev/null)
     OWN=$(stat -c "%U:%G" /etc/gshadow 2>/dev/null)
@@ -131,696 +133,377 @@ if [ -f /etc/gshadow ]; then
     else
         fail "CAT-I SRG-OS-000257" "/etc/gshadow owner: $OWN (expected root:shadow or root:root)"
     fi
-else
-    na "CAT-I SRG-OS-000257" "/etc/gshadow not present"
 fi
 
-# World-writable files
-log "\n  Scanning for world-writable files..."
-WW=$(find / -xdev -type f -perm -0002 \
-    ! -path "/proc/*" ! -path "/sys/*" ! -path "/dev/*" ! -path "/run/*" 2>/dev/null)
+log "  Scanning for world-writable files..."
+WW=$(find / -xdev -type f -perm -0002 ! -path "/proc/*" ! -path "/sys/*" ! -path "/dev/*" ! -path "/run/*" 2>/dev/null)
 if [ -z "$WW" ]; then
     pass "CAT-I SRG-OS-000258" "No world-writable files found"
 else
-    fail "CAT-I SRG-OS-000258" "World-writable files found:\n$WW"
+    fail "CAT-I SRG-OS-000258" "World-writable files:\n$WW"
 fi
 
-# Unowned files
 log "  Scanning for unowned files..."
-UNOWNED=$(find / -xdev \( -nouser -o -nogroup \) \
-    ! -path "/proc/*" ! -path "/sys/*" ! -path "/dev/*" 2>/dev/null)
+UNOWNED=$(find / -xdev \( -nouser -o -nogroup \) ! -path "/proc/*" ! -path "/sys/*" ! -path "/dev/*" 2>/dev/null)
 if [ -z "$UNOWNED" ]; then
     pass "CAT-I SRG-OS-000258" "No unowned files or directories"
 else
     fail "CAT-I SRG-OS-000258" "Unowned files/dirs:\n$UNOWNED"
 fi
 
-# SUID/SGID
 log "  Scanning for SUID/SGID binaries..."
-SUID=$(find / -xdev \( -perm -4000 -o -perm -2000 \) -type f \
-    ! -path "/proc/*" ! -path "/sys/*" 2>/dev/null)
+SUID=$(find / -xdev \( -perm -4000 -o -perm -2000 \) -type f ! -path "/proc/*" ! -path "/sys/*" 2>/dev/null)
 if [ -z "$SUID" ]; then
     pass "CAT-I SRG-OS-000326" "No SUID/SGID binaries found"
 else
-    warn "CAT-I SRG-OS-000326" "SUID/SGID binaries found (review each is authorized):\n$SUID"
+    fail "CAT-I SRG-OS-000326" "SUID/SGID binaries found (must be authorized):\n$SUID"
 fi
 
-# =============================================================================
-header "CAT I - SSH CONFIGURATION"
-# =============================================================================
-
-SSH_CONFIG="/etc/ssh/sshd_config"
-if [ ! -f "$SSH_CONFIG" ]; then
-    na "CAT-I SRG-OS-000033" "sshd not installed (good practice for containers)"
+TMP_PERM=$(stat -c "%a" /tmp 2>/dev/null)
+if [ "$TMP_PERM" = "1777" ]; then
+    pass "CAT-I SRG-OS-000368" "/tmp sticky bit set (1777)"
 else
-    warn "CAT-I SRG-OS-000033" "sshd is installed - review if required for this container"
-
-    check_ssh() {
-        local key=$1 expected=$2 stig=$3 cat=$4
-        local val
-        val=$(grep -E "^${key}\s" "$SSH_CONFIG" 2>/dev/null | awk '{print $2}')
-        if [ -z "$val" ]; then
-            warn "$cat $stig" "SSH $key not explicitly set (check default)"
-        elif [ "$val" = "$expected" ]; then
-            pass "$cat $stig" "SSH $key = $val"
-        else
-            fail "$cat $stig" "SSH $key = $val (expected $expected)"
-        fi
-    }
-
-    check_ssh "PermitRootLogin"       "no"  "SRG-OS-000109" "CAT-I"
-    check_ssh "PermitEmptyPasswords"  "no"  "SRG-OS-000106" "CAT-I"
-    check_ssh "X11Forwarding"         "no"  "SRG-OS-000378" "CAT-II"
-    check_ssh "IgnoreRhosts"          "yes" "SRG-OS-000015" "CAT-I"
-    check_ssh "HostbasedAuthentication" "no" "SRG-OS-000016" "CAT-II"
-    check_ssh "RhostsRSAAuthentication" "no" "SRG-OS-000017" "CAT-II"
-
-    # MaxAuthTries <= 4
-    MAX_AUTH=$(grep -E "^MaxAuthTries\s" "$SSH_CONFIG" 2>/dev/null | awk '{print $2}')
-    if [ -z "$MAX_AUTH" ]; then
-        warn "CAT-II SRG-OS-000021" "SSH MaxAuthTries not set (default is 6, should be <= 4)"
-    elif [ "$MAX_AUTH" -le 4 ] 2>/dev/null; then
-        pass "CAT-II SRG-OS-000021" "SSH MaxAuthTries = $MAX_AUTH (<= 4)"
-    else
-        fail "CAT-II SRG-OS-000021" "SSH MaxAuthTries = $MAX_AUTH (must be <= 4)"
-    fi
-
-    # ClientAliveInterval <= 600
-    ALIVE=$(grep -E "^ClientAliveInterval\s" "$SSH_CONFIG" 2>/dev/null | awk '{print $2}')
-    if [ -z "$ALIVE" ]; then
-        warn "CAT-II SRG-OS-000163" "SSH ClientAliveInterval not set"
-    elif [ "$ALIVE" -le 600 ] && [ "$ALIVE" -gt 0 ] 2>/dev/null; then
-        pass "CAT-II SRG-OS-000163" "SSH ClientAliveInterval = $ALIVE"
-    else
-        fail "CAT-II SRG-OS-000163" "SSH ClientAliveInterval = $ALIVE (must be 1-600)"
-    fi
-
-    # No weak ciphers
-    CIPHERS=$(grep -E "^Ciphers\s" "$SSH_CONFIG" 2>/dev/null)
-    if [ -z "$CIPHERS" ]; then
-        warn "CAT-II SRG-OS-000033" "SSH Ciphers not explicitly set - verify defaults exclude weak ciphers"
-    elif echo "$CIPHERS" | grep -qiE "arcfour|3des|blowfish|cast|rc4|des"; then
-        fail "CAT-I SRG-OS-000033" "SSH Ciphers contains weak algorithms: $CIPHERS"
-    else
-        pass "CAT-II SRG-OS-000033" "SSH Ciphers do not include known weak algorithms"
-    fi
-
-    # No weak MACs
-    MACS=$(grep -E "^MACs\s" "$SSH_CONFIG" 2>/dev/null)
-    if [ -z "$MACS" ]; then
-        warn "CAT-II SRG-OS-000033" "SSH MACs not explicitly set - verify defaults exclude MD5/96-bit"
-    elif echo "$MACS" | grep -qiE "md5|sha1-96|umac-64"; then
-        fail "CAT-II SRG-OS-000033" "SSH MACs contains weak algorithms: $MACS"
-    else
-        pass "CAT-II SRG-OS-000033" "SSH MACs do not include known weak algorithms"
-    fi
-
-    # Banner
-    BANNER=$(grep -E "^Banner\s" "$SSH_CONFIG" 2>/dev/null | awk '{print $2}')
-    if [ -n "$BANNER" ] && [ -f "$BANNER" ]; then
-        pass "CAT-II SRG-OS-000023" "SSH Banner set to $BANNER"
-    else
-        fail "CAT-II SRG-OS-000023" "SSH Banner not configured (required DoD warning)"
-    fi
+    fail "CAT-I SRG-OS-000368" "/tmp permissions: $TMP_PERM (expected 1777)"
 fi
 
-# =============================================================================
-header "CAT II - PASSWORD POLICY"
-# =============================================================================
+header "CAT I - DANGEROUS SERVICES"
 
-LOGIN_DEFS="/etc/login.defs"
-if [ -f "$LOGIN_DEFS" ]; then
-    check_login_defs() {
-        local key=$1 expected_op=$2 expected_val=$3 stig=$4 desc=$5
-        local val
-        val=$(grep -E "^${key}\s" "$LOGIN_DEFS" 2>/dev/null | awk '{print $2}')
-        if [ -z "$val" ]; then
-            warn "CAT-II $stig" "$key not set in login.defs - $desc"
-            return
-        fi
-        case "$expected_op" in
-            "ge") [ "$val" -ge "$expected_val" ] 2>/dev/null && \
-                pass "CAT-II $stig" "$key = $val (>= $expected_val) - $desc" || \
-                fail "CAT-II $stig" "$key = $val (must be >= $expected_val) - $desc" ;;
-            "le") [ "$val" -le "$expected_val" ] 2>/dev/null && \
-                pass "CAT-II $stig" "$key = $val (<= $expected_val) - $desc" || \
-                fail "CAT-II $stig" "$key = $val (must be <= $expected_val) - $desc" ;;
-            "eq") [ "$val" = "$expected_val" ] && \
-                pass "CAT-II $stig" "$key = $val - $desc" || \
-                fail "CAT-II $stig" "$key = $val (expected $expected_val) - $desc" ;;
-        esac
-    }
-
-    check_login_defs "PASS_MAX_DAYS" "le" "60"  "SRG-OS-000076" "Password max age"
-    check_login_defs "PASS_MIN_DAYS" "ge" "1"   "SRG-OS-000075" "Password min age"
-    check_login_defs "PASS_MIN_LEN"  "ge" "15"  "SRG-OS-000078" "Password minimum length"
-    check_login_defs "PASS_WARN_AGE" "ge" "7"   "SRG-OS-000343" "Password expiry warning"
-
-    # Hashing algorithm
-    HASH=$(grep -E "^ENCRYPT_METHOD\s" "$LOGIN_DEFS" 2>/dev/null | awk '{print $2}')
-    if [ "$HASH" = "SHA512" ] || [ "$HASH" = "yescrypt" ]; then
-        pass "CAT-II SRG-OS-000073" "Password hashing algorithm: $HASH"
-    else
-        fail "CAT-II SRG-OS-000073" "Password hashing algorithm: '$HASH' (expected SHA512 or yescrypt)"
+ALL_CLEAN=1
+for svc in telnet rsh rlogin rexec ftp vsftpd xinetd rpcbind; do
+    if command -v "$svc" > /dev/null 2>&1; then
+        fail "CAT-I SRG-OS-000095" "Dangerous service installed: $svc"
+        ALL_CLEAN=0
     fi
+done
+[ "$ALL_CLEAN" = "1" ] && pass "CAT-I SRG-OS-000095" "No dangerous services installed"
 
-    # SHA rounds
-    ROUNDS=$(grep -E "^SHA_CRYPT_MIN_ROUNDS\s" "$LOGIN_DEFS" 2>/dev/null | awk '{print $2}')
-    if [ -z "$ROUNDS" ]; then
-        warn "CAT-II SRG-OS-000073" "SHA_CRYPT_MIN_ROUNDS not set (recommend >= 5000)"
-    elif [ "$ROUNDS" -ge 5000 ] 2>/dev/null; then
-        pass "CAT-II SRG-OS-000073" "SHA_CRYPT_MIN_ROUNDS = $ROUNDS (>= 5000)"
+header "CAT I - PACKAGE INTEGRITY"
+
+if command -v dpkg > /dev/null 2>&1; then
+    log "  Running dpkg --verify..."
+    DPKG_OUT=$(dpkg --verify 2>&1)
+    if [ -z "$DPKG_OUT" ]; then
+        pass "CAT-I SRG-OS-000257" "All packages pass dpkg integrity check"
     else
-        fail "CAT-II SRG-OS-000073" "SHA_CRYPT_MIN_ROUNDS = $ROUNDS (must be >= 5000)"
+        fail "CAT-I SRG-OS-000257" "Package integrity issues:\n$DPKG_OUT"
     fi
 else
-    warn "CAT-II SRG-OS-000076" "/etc/login.defs not found"
+    fail "CAT-I SRG-OS-000257" "dpkg not available"
 fi
 
-# =============================================================================
-header "CAT II - PAM CONFIGURATION"
-# =============================================================================
-
-if [ -d /etc/pam.d ]; then
-    # Account lockout
-    if grep -rq "pam_faillock\|pam_tally2" /etc/pam.d/ 2>/dev/null; then
-        pass "CAT-II SRG-OS-000021" "Account lockout PAM module configured (pam_faillock/pam_tally2)"
-
-        # Check deny value
-        DENY=$(grep -r "pam_faillock\|pam_tally2" /etc/pam.d/ 2>/dev/null | grep -o "deny=[0-9]*" | head -1 | cut -d= -f2)
-        if [ -n "$DENY" ]; then
-            if [ "$DENY" -le 3 ] 2>/dev/null; then
-                pass "CAT-II SRG-OS-000021" "Lockout deny threshold = $DENY (<= 3)"
-            else
-                fail "CAT-II SRG-OS-000021" "Lockout deny threshold = $DENY (must be <= 3)"
-            fi
-        else
-            warn "CAT-II SRG-OS-000021" "Could not determine lockout deny threshold"
-        fi
-    else
-        fail "CAT-II SRG-OS-000021" "No account lockout PAM module found (pam_faillock/pam_tally2)"
-    fi
-
-    # Password complexity
-    if grep -rq "pam_pwquality\|pam_cracklib" /etc/pam.d/ 2>/dev/null; then
-        pass "CAT-II SRG-OS-000069" "Password complexity module configured"
-
-        # Check minlen
-        MINLEN=$(grep -r "pam_pwquality\|pam_cracklib" /etc/pam.d/ 2>/dev/null | grep -o "minlen=[0-9]*" | head -1 | cut -d= -f2)
-        if [ -n "$MINLEN" ]; then
-            [ "$MINLEN" -ge 15 ] 2>/dev/null && \
-                pass "CAT-II SRG-OS-000078" "PAM password minlen = $MINLEN (>= 15)" || \
-                fail "CAT-II SRG-OS-000078" "PAM password minlen = $MINLEN (must be >= 15)"
-        else
-            warn "CAT-II SRG-OS-000078" "PAM minlen not found - check /etc/security/pwquality.conf"
-        fi
-
-        # Check ucredit (uppercase)
-        UCREDIT=$(grep -r "ucredit" /etc/pam.d/ /etc/security/pwquality.conf 2>/dev/null | grep -o "ucredit=-[0-9]*" | head -1 | cut -d= -f2)
-        if [ -n "$UCREDIT" ] && [ "$UCREDIT" -le -1 ] 2>/dev/null; then
-            pass "CAT-II SRG-OS-000069" "PAM ucredit = $UCREDIT (requires uppercase)"
-        else
-            fail "CAT-II SRG-OS-000069" "PAM ucredit = '$UCREDIT' (must be <= -1 to require uppercase)"
-        fi
-
-        # Check lcredit (lowercase)
-        LCREDIT=$(grep -r "lcredit" /etc/pam.d/ /etc/security/pwquality.conf 2>/dev/null | grep -o "lcredit=-[0-9]*" | head -1 | cut -d= -f2)
-        if [ -n "$LCREDIT" ] && [ "$LCREDIT" -le -1 ] 2>/dev/null; then
-            pass "CAT-II SRG-OS-000070" "PAM lcredit = $LCREDIT (requires lowercase)"
-        else
-            fail "CAT-II SRG-OS-000070" "PAM lcredit = '$LCREDIT' (must be <= -1 to require lowercase)"
-        fi
-
-        # Check dcredit (digits)
-        DCREDIT=$(grep -r "dcredit" /etc/pam.d/ /etc/security/pwquality.conf 2>/dev/null | grep -o "dcredit=-[0-9]*" | head -1 | cut -d= -f2)
-        if [ -n "$DCREDIT" ] && [ "$DCREDIT" -le -1 ] 2>/dev/null; then
-            pass "CAT-II SRG-OS-000071" "PAM dcredit = $DCREDIT (requires digit)"
-        else
-            fail "CAT-II SRG-OS-000071" "PAM dcredit = '$DCREDIT' (must be <= -1 to require digit)"
-        fi
-
-        # Check ocredit (special chars)
-        OCREDIT=$(grep -r "ocredit" /etc/pam.d/ /etc/security/pwquality.conf 2>/dev/null | grep -o "ocredit=-[0-9]*" | head -1 | cut -d= -f2)
-        if [ -n "$OCREDIT" ] && [ "$OCREDIT" -le -1 ] 2>/dev/null; then
-            pass "CAT-II SRG-OS-000072" "PAM ocredit = $OCREDIT (requires special char)"
-        else
-            fail "CAT-II SRG-OS-000072" "PAM ocredit = '$OCREDIT' (must be <= -1 to require special char)"
-        fi
-    else
-        fail "CAT-II SRG-OS-000069" "No password complexity PAM module (pam_pwquality/pam_cracklib) found"
-    fi
-
-    # Password history / reuse
-    if grep -rq "pam_pwhistory\|remember=" /etc/pam.d/ 2>/dev/null; then
-        REMEMBER=$(grep -r "remember=" /etc/pam.d/ 2>/dev/null | grep -o "remember=[0-9]*" | head -1 | cut -d= -f2)
-        if [ -n "$REMEMBER" ] && [ "$REMEMBER" -ge 5 ] 2>/dev/null; then
-            pass "CAT-II SRG-OS-000077" "Password history remember = $REMEMBER (>= 5)"
-        else
-            fail "CAT-II SRG-OS-000077" "Password history remember = '$REMEMBER' (must be >= 5)"
-        fi
-    else
-        fail "CAT-II SRG-OS-000077" "No password history restriction (pam_pwhistory) found"
-    fi
-
-    # su restriction
-    if grep -q "pam_wheel" /etc/pam.d/su 2>/dev/null; then
-        pass "CAT-II SRG-OS-000480" "su restricted via pam_wheel"
-    else
-        warn "CAT-II SRG-OS-000480" "su not restricted to wheel group via pam_wheel"
-    fi
-else
-    na "CAT-II SRG-OS-000069" "/etc/pam.d not present"
-fi
-
-# =============================================================================
-header "CAT II - KERNEL & NETWORK PARAMETERS"
-# =============================================================================
-
-check_sysctl() {
-    local param=$1 expected=$2 stig=$3 cat=$4
-    local actual
-    actual=$(sysctl -n "$param" 2>/dev/null)
-    if [ -z "$actual" ]; then
-        na "$cat $stig" "sysctl $param not available (may be host-controlled)"
-    elif [ "$actual" = "$expected" ]; then
-        pass "$cat $stig" "sysctl $param = $actual"
-    else
-        warn "$cat $stig" "sysctl $param = $actual (expected $expected) - may be host-controlled"
-    fi
-}
-
-# Network hardening
-check_sysctl "net.ipv4.ip_forward"                        "0" "SRG-OS-000480" "CAT-II"
-check_sysctl "net.ipv4.conf.all.send_redirects"           "0" "SRG-OS-000480" "CAT-II"
-check_sysctl "net.ipv4.conf.default.send_redirects"       "0" "SRG-OS-000480" "CAT-II"
-check_sysctl "net.ipv4.conf.all.accept_redirects"         "0" "SRG-OS-000480" "CAT-II"
-check_sysctl "net.ipv4.conf.default.accept_redirects"     "0" "SRG-OS-000480" "CAT-II"
-check_sysctl "net.ipv4.conf.all.accept_source_route"      "0" "SRG-OS-000480" "CAT-II"
-check_sysctl "net.ipv4.conf.default.accept_source_route"  "0" "SRG-OS-000480" "CAT-II"
-check_sysctl "net.ipv4.conf.all.log_martians"             "1" "SRG-OS-000480" "CAT-II"
-check_sysctl "net.ipv4.conf.default.log_martians"         "1" "SRG-OS-000480" "CAT-II"
-check_sysctl "net.ipv4.icmp_echo_ignore_broadcasts"       "1" "SRG-OS-000480" "CAT-II"
-check_sysctl "net.ipv4.icmp_ignore_bogus_error_responses" "1" "SRG-OS-000480" "CAT-II"
-check_sysctl "net.ipv4.tcp_syncookies"                    "1" "SRG-OS-000480" "CAT-II"
-check_sysctl "net.ipv6.conf.all.accept_redirects"         "0" "SRG-OS-000480" "CAT-II"
-check_sysctl "net.ipv6.conf.default.accept_redirects"     "0" "SRG-OS-000480" "CAT-II"
-check_sysctl "net.ipv6.conf.all.accept_source_route"      "0" "SRG-OS-000480" "CAT-II"
-check_sysctl "net.ipv6.conf.all.disable_ipv6"             "1" "SRG-OS-000480" "CAT-II"
-
-# Kernel hardening
-check_sysctl "kernel.randomize_va_space" "2" "SRG-OS-000433" "CAT-II"
-check_sysctl "kernel.dmesg_restrict"     "1" "SRG-OS-000138" "CAT-II"
-check_sysctl "fs.suid_dumpable"          "0" "SRG-OS-000480" "CAT-II"
-check_sysctl "kernel.core_uses_pid"      "1" "SRG-OS-000480" "CAT-II"
-check_sysctl "kernel.kptr_restrict"      "2" "SRG-OS-000138" "CAT-II"
-check_sysctl "net.core.bpf_jit_harden"  "2" "SRG-OS-000138" "CAT-II"
-
-# =============================================================================
-header "CAT II - AUDITING"
-# =============================================================================
-
-# In containers auditd is host-inherited but check if tools/rules are present
-if command -v auditctl > /dev/null 2>&1; then
-    RULES=$(auditctl -l 2>/dev/null)
-    if [ -n "$RULES" ] && ! echo "$RULES" | grep -q "No rules"; then
-        pass "CAT-II SRG-OS-000037" "Audit rules loaded"
-        log "  Rules: $RULES"
-    else
-        warn "CAT-II SRG-OS-000037" "No audit rules loaded (expected if host-managed)"
-    fi
-else
-    na "CAT-II SRG-OS-000037" "auditctl not in container - audit managed by host kernel"
-fi
-
-# Check audit log directory
-if [ -d /var/log/audit ]; then
-    AUDIT_PERM=$(stat -c "%a" /var/log/audit 2>/dev/null)
-    AUDIT_OWN=$(stat -c "%U:%G" /var/log/audit 2>/dev/null)
-    [ "$AUDIT_PERM" = "700" ] && \
-        pass "CAT-II SRG-OS-000057" "/var/log/audit permissions: $AUDIT_PERM" || \
-        warn "CAT-II SRG-OS-000057" "/var/log/audit permissions: $AUDIT_PERM (expected 700)"
-    [ "$AUDIT_OWN" = "root:root" ] && \
-        pass "CAT-II SRG-OS-000057" "/var/log/audit owner: $AUDIT_OWN" || \
-        warn "CAT-II SRG-OS-000057" "/var/log/audit owner: $AUDIT_OWN (expected root:root)"
-else
-    na "CAT-II SRG-OS-000057" "/var/log/audit not present - audit managed by host"
-fi
-
-# =============================================================================
-header "CAT II - SYSTEM BANNERS"
-# =============================================================================
+header "CAT I - SYSTEM BANNERS"
 
 check_banner() {
     local file=$1 stig=$2
     if [ ! -f "$file" ]; then
-        fail "CAT-II $stig" "$file does not exist (required DoD warning banner)"
+        fail "CAT-I $stig" "$file missing (required DoD warning banner)"
         return
     fi
     local content
     content=$(cat "$file" 2>/dev/null)
     if [ -z "$content" ]; then
-        fail "CAT-II $stig" "$file is empty (must contain DoD warning banner)"
+        fail "CAT-I $stig" "$file is empty"
     elif echo "$content" | grep -qiE "authorized|official use|monitored|consent|warning|unauthorized"; then
-        pass "CAT-II $stig" "$file contains warning banner language"
+        pass "CAT-I $stig" "$file contains required warning banner"
     else
-        fail "CAT-II $stig" "$file exists but missing DoD warning language"
-        log "  Current content: $content"
+        fail "CAT-I $stig" "$file missing DoD warning language. Current: $content"
     fi
 }
 
 check_banner "/etc/issue"     "SRG-OS-000023"
 check_banner "/etc/issue.net" "SRG-OS-000024"
 
-if [ -f /etc/motd ]; then
-    MOTD=$(cat /etc/motd 2>/dev/null)
-    if echo "$MOTD" | grep -qiE "authorized|official use|monitored|consent|warning"; then
-        pass "CAT-II SRG-OS-000023" "/etc/motd contains warning banner language"
+header "CAT II - PASSWORD POLICY"
+
+LOGIN_DEFS="/etc/login.defs"
+if [ ! -f "$LOGIN_DEFS" ]; then
+    fail "CAT-II SRG-OS-000076" "/etc/login.defs missing"
+else
+    get_login() { grep -E "^$1\s" "$LOGIN_DEFS" 2>/dev/null | awk '{print $2}'; }
+
+    VAL=$(get_login "PASS_MAX_DAYS")
+    if [ -z "$VAL" ]; then
+        fail "CAT-II SRG-OS-000076" "PASS_MAX_DAYS not set"
+    elif [ "$VAL" -le 60 ] 2>/dev/null; then
+        pass "CAT-II SRG-OS-000076" "PASS_MAX_DAYS = $VAL (<= 60)"
     else
-        warn "CAT-II SRG-OS-000023" "/etc/motd present but may not contain DoD warning language"
-        log "  Current content: $MOTD"
+        fail "CAT-II SRG-OS-000076" "PASS_MAX_DAYS = $VAL (must be <= 60)"
     fi
-else
-    warn "CAT-II SRG-OS-000023" "/etc/motd not present (recommended)"
-fi
 
-# =============================================================================
-header "CAT II - UNNECESSARY SERVICES & PORTS"
-# =============================================================================
-
-DANGEROUS_SVCS="telnet rsh rlogin rexec ftp vsftpd xinetd nis portmap rpcbind chargen daytime discard echo time"
-FOUND_SVCS=""
-for svc in $DANGEROUS_SVCS; do
-    if command -v "$svc" > /dev/null 2>&1; then
-        FOUND_SVCS="$FOUND_SVCS $svc"
-    fi
-done
-if [ -z "$FOUND_SVCS" ]; then
-    pass "CAT-II SRG-OS-000095" "No unnecessary/dangerous services found"
-else
-    fail "CAT-II SRG-OS-000095" "Unnecessary services present: $FOUND_SVCS"
-fi
-
-# Listening ports
-if command -v ss > /dev/null 2>&1; then
-    LISTEN=$(ss -tlnp 2>/dev/null | grep "LISTEN")
-    PORT_COUNT=$(echo "$LISTEN" | grep -c "LISTEN" 2>/dev/null || echo "0")
-    log "\n  Listening TCP sockets:"
-    if [ -n "$LISTEN" ]; then
-        log "$LISTEN"
-        warn "CAT-II SRG-OS-000095" "$PORT_COUNT listening port(s) - verify each is authorized"
+    VAL=$(get_login "PASS_MIN_DAYS")
+    if [ -z "$VAL" ]; then
+        fail "CAT-II SRG-OS-000075" "PASS_MIN_DAYS not set"
+    elif [ "$VAL" -ge 1 ] 2>/dev/null; then
+        pass "CAT-II SRG-OS-000075" "PASS_MIN_DAYS = $VAL (>= 1)"
     else
-        pass "CAT-II SRG-OS-000095" "No listening TCP ports (minimal attack surface)"
+        fail "CAT-II SRG-OS-000075" "PASS_MIN_DAYS = $VAL (must be >= 1)"
     fi
-elif command -v netstat > /dev/null 2>&1; then
-    LISTEN=$(netstat -tlnp 2>/dev/null)
-    log "\n  Listening TCP ports:\n$LISTEN"
-else
-    warn "CAT-II SRG-OS-000095" "ss/netstat not available - cannot check listening ports"
+
+    VAL=$(get_login "PASS_MIN_LEN")
+    if [ -z "$VAL" ]; then
+        fail "CAT-II SRG-OS-000078" "PASS_MIN_LEN not set"
+    elif [ "$VAL" -ge 15 ] 2>/dev/null; then
+        pass "CAT-II SRG-OS-000078" "PASS_MIN_LEN = $VAL (>= 15)"
+    else
+        fail "CAT-II SRG-OS-000078" "PASS_MIN_LEN = $VAL (must be >= 15)"
+    fi
+
+    VAL=$(get_login "PASS_WARN_AGE")
+    if [ -z "$VAL" ]; then
+        fail "CAT-II SRG-OS-000343" "PASS_WARN_AGE not set"
+    elif [ "$VAL" -ge 7 ] 2>/dev/null; then
+        pass "CAT-II SRG-OS-000343" "PASS_WARN_AGE = $VAL (>= 7)"
+    else
+        fail "CAT-II SRG-OS-000343" "PASS_WARN_AGE = $VAL (must be >= 7)"
+    fi
+
+    HASH=$(get_login "ENCRYPT_METHOD")
+    if [ "$HASH" = "SHA512" ] || [ "$HASH" = "yescrypt" ]; then
+        pass "CAT-II SRG-OS-000073" "ENCRYPT_METHOD = $HASH"
+    else
+        fail "CAT-II SRG-OS-000073" "ENCRYPT_METHOD = '$HASH' (must be SHA512 or yescrypt)"
+    fi
+
+    VAL=$(get_login "SHA_CRYPT_MIN_ROUNDS")
+    if [ -z "$VAL" ]; then
+        fail "CAT-II SRG-OS-000073" "SHA_CRYPT_MIN_ROUNDS not set (must be >= 5000)"
+    elif [ "$VAL" -ge 5000 ] 2>/dev/null; then
+        pass "CAT-II SRG-OS-000073" "SHA_CRYPT_MIN_ROUNDS = $VAL (>= 5000)"
+    else
+        fail "CAT-II SRG-OS-000073" "SHA_CRYPT_MIN_ROUNDS = $VAL (must be >= 5000)"
+    fi
 fi
 
-# =============================================================================
-header "CAT II - CRON & SCHEDULED TASKS"
-# =============================================================================
+header "CAT II - PAM CONFIGURATION"
 
-for cronpath in /etc/crontab /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.weekly /etc/cron.monthly; do
-    if [ -e "$cronpath" ]; then
-        PERM=$(stat -c "%a" "$cronpath" 2>/dev/null)
-        OWN=$(stat -c "%U:%G" "$cronpath" 2>/dev/null)
-        if [ "$OWN" = "root:root" ]; then
-            pass "CAT-II SRG-OS-000480" "$cronpath owner: $OWN"
+if [ ! -d /etc/pam.d ]; then
+    fail "CAT-II SRG-OS-000069" "/etc/pam.d missing"
+else
+    if grep -rq "pam_faillock\|pam_tally2" /etc/pam.d/ 2>/dev/null; then
+        pass "CAT-II SRG-OS-000021" "Account lockout module configured"
+        DENY=$(grep -r "pam_faillock\|pam_tally2" /etc/pam.d/ 2>/dev/null | grep -o "deny=[0-9]*" | head -1 | cut -d= -f2)
+        if [ -z "$DENY" ]; then
+            fail "CAT-II SRG-OS-000021" "Lockout deny value not found"
+        elif [ "$DENY" -le 3 ] 2>/dev/null; then
+            pass "CAT-II SRG-OS-000021" "Lockout deny = $DENY (<= 3)"
         else
-            fail "CAT-II SRG-OS-000480" "$cronpath owner: $OWN (expected root:root)"
+            fail "CAT-II SRG-OS-000021" "Lockout deny = $DENY (must be <= 3)"
         fi
-        if [ "$PERM" -le 700 ] 2>/dev/null || [ "$PERM" = "644" ]; then
-            pass "CAT-II SRG-OS-000480" "$cronpath permissions: $PERM"
-        else
-            warn "CAT-II SRG-OS-000480" "$cronpath permissions: $PERM (expected <= 700)"
-        fi
-    fi
-done
-
-if [ -f /etc/cron.allow ]; then
-    pass "CAT-II SRG-OS-000480" "/etc/cron.allow exists (whitelist approach)"
-elif [ -f /etc/cron.deny ]; then
-    warn "CAT-II SRG-OS-000480" "Only /etc/cron.deny exists - /etc/cron.allow preferred"
-else
-    na  "CAT-II SRG-OS-000480" "No cron access control files (cron likely not installed)"
-fi
-
-# =============================================================================
-header "CAT II - KERNEL MODULES"
-# =============================================================================
-
-BANNED_MODS="usb-storage cramfs freevxfs jffs2 hfs hfsplus squashfs udf bluetooth dccp sctp rds tipc"
-for mod in $BANNED_MODS; do
-    DISABLED=$(grep -r "install ${mod} /bin/true\|install ${mod} /bin/false\|blacklist ${mod}" \
-        /etc/modprobe.d/ 2>/dev/null)
-    if [ -n "$DISABLED" ]; then
-        pass "CAT-II SRG-OS-000095" "Kernel module '$mod' is disabled"
     else
-        warn "CAT-II SRG-OS-000095" "Kernel module '$mod' not explicitly disabled (may be N/A in container)"
+        fail "CAT-II SRG-OS-000021" "No account lockout PAM module (pam_faillock/pam_tally2)"
     fi
-done
 
-# =============================================================================
-header "CAT II - FILESYSTEM MOUNTS"
-# =============================================================================
-
-for mountpoint in /tmp /var /var/log /var/tmp /home; do
-    MINFO=$(findmnt "$mountpoint" 2>/dev/null)
-    if [ -n "$MINFO" ]; then
-        log "  $mountpoint: $MINFO"
-        for opt in noexec nosuid nodev; do
-            if echo "$MINFO" | grep -q "$opt"; then
-                pass "CAT-II SRG-OS-000368" "$mountpoint mounted with $opt"
-            else
-                warn "CAT-II SRG-OS-000368" "$mountpoint not mounted with $opt"
-            fi
-        done
+    if grep -rq "pam_pwquality\|pam_cracklib" /etc/pam.d/ 2>/dev/null; then
+        pass "CAT-II SRG-OS-000069" "Password complexity module configured"
     else
-        na "CAT-II SRG-OS-000368" "$mountpoint is not a separate mount (common in containers)"
+        fail "CAT-II SRG-OS-000069" "No password complexity module (pam_pwquality/pam_cracklib)"
     fi
-done
 
-# /tmp permissions
-TMP_PERM=$(stat -c "%a" /tmp 2>/dev/null)
-if [ "$TMP_PERM" = "1777" ]; then
-    pass "CAT-II SRG-OS-000368" "/tmp sticky bit set (1777)"
-else
-    fail "CAT-II SRG-OS-000368" "/tmp permissions: $TMP_PERM (expected 1777)"
+    PWQCONF="/etc/security/pwquality.conf"
+    PAMFILES=$(grep -rl "pam_pwquality\|pam_cracklib" /etc/pam.d/ 2>/dev/null)
+
+    get_credit() {
+        local key=$1
+        grep -h "$key" $PWQCONF $PAMFILES 2>/dev/null | grep -v "^#" | grep -o "${key}=-*[0-9]*" | head -1 | cut -d= -f2
+    }
+
+    VAL=$(get_credit "ucredit")
+    if [ -n "$VAL" ] && [ "$VAL" -le -1 ] 2>/dev/null; then
+        pass "CAT-II SRG-OS-000069" "ucredit = $VAL (uppercase required)"
+    else
+        fail "CAT-II SRG-OS-000069" "ucredit = '$VAL' (must be <= -1)"
+    fi
+
+    VAL=$(get_credit "lcredit")
+    if [ -n "$VAL" ] && [ "$VAL" -le -1 ] 2>/dev/null; then
+        pass "CAT-II SRG-OS-000070" "lcredit = $VAL (lowercase required)"
+    else
+        fail "CAT-II SRG-OS-000070" "lcredit = '$VAL' (must be <= -1)"
+    fi
+
+    VAL=$(get_credit "dcredit")
+    if [ -n "$VAL" ] && [ "$VAL" -le -1 ] 2>/dev/null; then
+        pass "CAT-II SRG-OS-000071" "dcredit = $VAL (digit required)"
+    else
+        fail "CAT-II SRG-OS-000071" "dcredit = '$VAL' (must be <= -1)"
+    fi
+
+    VAL=$(get_credit "ocredit")
+    if [ -n "$VAL" ] && [ "$VAL" -le -1 ] 2>/dev/null; then
+        pass "CAT-II SRG-OS-000072" "ocredit = $VAL (special char required)"
+    else
+        fail "CAT-II SRG-OS-000072" "ocredit = '$VAL' (must be <= -1)"
+    fi
+
+    REMEMBER=$(grep -r "remember=" /etc/pam.d/ 2>/dev/null | grep -o "remember=[0-9]*" | head -1 | cut -d= -f2)
+    if [ -z "$REMEMBER" ]; then
+        fail "CAT-II SRG-OS-000077" "Password history (remember) not configured"
+    elif [ "$REMEMBER" -ge 5 ] 2>/dev/null; then
+        pass "CAT-II SRG-OS-000077" "Password history remember = $REMEMBER (>= 5)"
+    else
+        fail "CAT-II SRG-OS-000077" "Password history remember = $REMEMBER (must be >= 5)"
+    fi
 fi
 
-# =============================================================================
-header "CAT II - LOGGING & SYSLOG"
-# =============================================================================
+header "CAT II - LOGGING"
 
-if command -v rsyslogd > /dev/null 2>&1 || [ -f /etc/rsyslog.conf ]; then
-    pass "CAT-II SRG-OS-000479" "rsyslog is present"
-    if [ -f /etc/rsyslog.conf ]; then
-        if grep -qE "^[^#]*@@?\s*[0-9a-zA-Z]" /etc/rsyslog.conf 2>/dev/null; then
-            pass "CAT-II SRG-OS-000479" "Remote syslog forwarding configured in rsyslog.conf"
-        else
-            warn "CAT-II SRG-OS-000479" "Remote syslog forwarding not found in rsyslog.conf"
-        fi
-    fi
-else
-    warn "CAT-II SRG-OS-000479" "rsyslog not found - ensure logs forwarded to host or central server"
-fi
-
-# /var/log permissions
 if [ -d /var/log ]; then
-    LOG_PERM=$(stat -c "%a" /var/log 2>/dev/null)
-    LOG_OWN=$(stat -c "%U:%G" /var/log 2>/dev/null)
-    [ "$LOG_OWN" = "root:root" ] && \
-        pass "CAT-II SRG-OS-000057" "/var/log owner: $LOG_OWN" || \
-        fail "CAT-II SRG-OS-000057" "/var/log owner: $LOG_OWN (expected root:root)"
-    [ "$LOG_PERM" -le 755 ] 2>/dev/null && \
-        pass "CAT-II SRG-OS-000057" "/var/log permissions: $LOG_PERM" || \
-        fail "CAT-II SRG-OS-000057" "/var/log permissions: $LOG_PERM (expected <= 755)"
-
-    # Check log files are not world readable
-    WORLD_READ_LOGS=$(find /var/log -type f -perm /o+r 2>/dev/null | head -10)
-    if [ -z "$WORLD_READ_LOGS" ]; then
-        pass "CAT-II SRG-OS-000057" "No world-readable log files in /var/log"
+    OWN=$(stat -c "%U:%G" /var/log 2>/dev/null)
+    PERM=$(stat -c "%a" /var/log 2>/dev/null)
+    if [ "$OWN" = "root:root" ]; then
+        pass "CAT-II SRG-OS-000057" "/var/log owner: $OWN"
     else
-        warn "CAT-II SRG-OS-000057" "World-readable log files found:\n$WORLD_READ_LOGS"
+        fail "CAT-II SRG-OS-000057" "/var/log owner: $OWN (expected root:root)"
+    fi
+    if [ "$PERM" -le 755 ] 2>/dev/null; then
+        pass "CAT-II SRG-OS-000057" "/var/log permissions: $PERM"
+    else
+        fail "CAT-II SRG-OS-000057" "/var/log permissions: $PERM (must be <= 755)"
     fi
 else
     fail "CAT-II SRG-OS-000479" "/var/log directory missing"
 fi
 
-# =============================================================================
-header "CAT II - CRYPTOGRAPHY & FIPS"
-# =============================================================================
-
-# FIPS
-if [ -f /proc/sys/crypto/fips_enabled ]; then
-    FIPS=$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)
-    if [ "$FIPS" = "1" ]; then
-        pass "CAT-II SRG-OS-000120" "FIPS mode enabled"
-    else
-        warn "CAT-II SRG-OS-000120" "FIPS mode not enabled (value=$FIPS) - required for many DoD systems"
-    fi
+WORLD_LOGS=$(find /var/log -type f -perm /o+r 2>/dev/null)
+if [ -z "$WORLD_LOGS" ]; then
+    pass "CAT-II SRG-OS-000057" "No world-readable log files in /var/log"
 else
-    na "CAT-II SRG-OS-000120" "/proc/sys/crypto/fips_enabled not available in this container"
+    fail "CAT-II SRG-OS-000057" "World-readable log files:\n$WORLD_LOGS"
 fi
 
-# OpenSSL
-if command -v openssl > /dev/null 2>&1; then
-    OPENSSL_VER=$(openssl version 2>/dev/null)
-    pass "CAT-II SRG-OS-000120" "OpenSSL present: $OPENSSL_VER"
+if command -v rsyslogd > /dev/null 2>&1 || [ -f /etc/rsyslog.conf ]; then
+    pass "CAT-II SRG-OS-000479" "rsyslog is present"
 else
-    warn "CAT-II SRG-OS-000120" "OpenSSL not installed"
+    fail "CAT-II SRG-OS-000479" "No syslog daemon found"
 fi
 
-# =============================================================================
-header "CAT II - PACKAGE INTEGRITY"
-# =============================================================================
+header "CAT II - CRON PERMISSIONS"
 
-if command -v dpkg > /dev/null 2>&1; then
-    log "  Running dpkg --verify (may take a moment)..."
-    DPKG_OUT=$(dpkg --verify 2>&1)
-    if [ -z "$DPKG_OUT" ]; then
-        pass "CAT-II SRG-OS-000257" "All packages pass dpkg integrity check"
-    else
-        fail "CAT-II SRG-OS-000257" "Package integrity issues:\n$DPKG_OUT"
+for cronpath in /etc/crontab /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.weekly /etc/cron.monthly; do
+    if [ -e "$cronpath" ]; then
+        OWN=$(stat -c "%U:%G" "$cronpath" 2>/dev/null)
+        PERM=$(stat -c "%a" "$cronpath" 2>/dev/null)
+        if [ "$OWN" = "root:root" ]; then
+            pass "CAT-II SRG-OS-000480" "$cronpath owner: $OWN"
+        else
+            fail "CAT-II SRG-OS-000480" "$cronpath owner: $OWN (expected root:root)"
+        fi
+        if [ "$PERM" -le 755 ] 2>/dev/null; then
+            pass "CAT-II SRG-OS-000480" "$cronpath permissions: $PERM"
+        else
+            fail "CAT-II SRG-OS-000480" "$cronpath permissions: $PERM (must be <= 755)"
+        fi
     fi
+done
 
-    PKG_COUNT=$(dpkg -l 2>/dev/null | grep -c "^ii" || echo "0")
-    log "  Total installed packages: $PKG_COUNT"
-    if [ "$PKG_COUNT" -lt 50 ]; then
-        pass "CAT-II SRG-OS-000368" "Minimal package count: $PKG_COUNT"
-    elif [ "$PKG_COUNT" -lt 150 ]; then
-        warn "CAT-II SRG-OS-000368" "Package count $PKG_COUNT - review for unnecessary packages"
-    else
-        fail "CAT-II SRG-OS-000368" "High package count $PKG_COUNT - remove unnecessary packages"
-    fi
-else
-    warn "CAT-II SRG-OS-000257" "dpkg not available"
-fi
-
-# =============================================================================
 header "CAT II - HOME DIRECTORY PERMISSIONS"
-# =============================================================================
 
 while IFS=: read -r user _ uid _ _ homedir _; do
     if [ "$uid" -ge 1000 ] 2>/dev/null && [ -n "$homedir" ] && [ "$homedir" != "/" ] && [ -d "$homedir" ]; then
         PERM=$(stat -c "%a" "$homedir" 2>/dev/null)
         OWN=$(stat -c "%U" "$homedir" 2>/dev/null)
         if [ "$PERM" -le 750 ] 2>/dev/null; then
-            pass "CAT-II SRG-OS-000480" "Home dir $homedir ($user) permissions: $PERM"
+            pass "CAT-II SRG-OS-000480" "Home $homedir ($user) permissions: $PERM"
         else
-            fail "CAT-II SRG-OS-000480" "Home dir $homedir ($user) permissions: $PERM (must be <= 750)"
+            fail "CAT-II SRG-OS-000480" "Home $homedir ($user) permissions: $PERM (must be <= 750)"
         fi
         if [ "$OWN" = "$user" ]; then
-            pass "CAT-II SRG-OS-000480" "Home dir $homedir owned by $user"
+            pass "CAT-II SRG-OS-000480" "Home $homedir owned by: $user"
         else
-            fail "CAT-II SRG-OS-000480" "Home dir $homedir owned by $OWN (expected $user)"
+            fail "CAT-II SRG-OS-000480" "Home $homedir owned by $OWN (expected $user)"
         fi
-
-        # Check for .rhosts/.netrc/.shosts
-        for badfile in .rhosts .netrc .shosts; do
-            if [ -f "$homedir/$badfile" ]; then
-                fail "CAT-I SRG-OS-000015" "$homedir/$badfile exists (must be removed)"
-            fi
-        done
     fi
 done < /etc/passwd
 
-# =============================================================================
-header "CONTAINER-SPECIFIC CHECKS"
-# =============================================================================
+header "CAT II - CONTAINER SPECIFIC"
 
-# Running as non-root
 CUR_UID=$(id -u)
 if [ "$CUR_UID" -ne 0 ]; then
-    pass "CONTAINER" "Running as non-root UID: $CUR_UID"
+    pass "CAT-II CONTAINER" "Running as non-root UID: $CUR_UID"
 else
-    warn "CONTAINER" "Running as root (UID 0) - use non-root USER in Dockerfile"
+    fail "CAT-II CONTAINER" "Running as root (UID 0)"
 fi
 
-# Shells present (attack surface)
-log "\n  Checking for shell interpreters:"
-for shell in /bin/sh /bin/bash /bin/zsh /bin/fish /bin/ksh /bin/tcsh /bin/csh /bin/dash; do
-    if [ -f "$shell" ]; then
-        warn "CONTAINER" "Shell present: $shell (minimize in production)"
-    fi
-done
-
-# Package managers (attack surface)
-log "\n  Checking for package managers:"
+PM_FOUND=""
 for pm in apt apt-get apk yum dnf pip pip3 npm yarn; do
-    if command -v "$pm" > /dev/null 2>&1; then
-        warn "CONTAINER" "Package manager present: $pm (remove from hardened image)"
-    fi
+    if command -v "$pm" > /dev/null 2>&1; then PM_FOUND="$PM_FOUND $pm"; fi
 done
-
-# Compilers / dev tools
-log "\n  Checking for compilers/dev tools:"
-FOUND_DEV=""
-for tool in gcc g++ cc make cmake perl python3 python ruby curl wget; do
-    if command -v "$tool" > /dev/null 2>&1; then
-        FOUND_DEV="$FOUND_DEV $tool"
-    fi
-done
-if [ -z "$FOUND_DEV" ]; then
-    pass "CONTAINER" "No compilers or dev tools found"
+if [ -z "$PM_FOUND" ]; then
+    pass "CAT-II CONTAINER" "No package managers present"
 else
-    warn "CONTAINER" "Dev tools present (review if required): $FOUND_DEV"
+    fail "CAT-II CONTAINER" "Package managers found (remove): $PM_FOUND"
 fi
 
-# Capabilities
-if command -v capsh > /dev/null 2>&1; then
-    CAPS=$(capsh --print 2>/dev/null)
-    log "\n  Container capabilities:\n$CAPS"
-elif [ -f /proc/self/status ]; then
-    CAP_EFF=$(grep "^CapEff:" /proc/self/status 2>/dev/null)
-    log "\n  Effective capabilities: $CAP_EFF"
-    if echo "$CAP_EFF" | grep -q "CapEff:\s*0000000000000000"; then
-        pass "CONTAINER" "No effective capabilities (fully dropped)"
+COMPILERS=""
+for tool in gcc g++ cc make cmake; do
+    if command -v "$tool" > /dev/null 2>&1; then COMPILERS="$COMPILERS $tool"; fi
+done
+if [ -z "$COMPILERS" ]; then
+    pass "CAT-II CONTAINER" "No compilers present"
+else
+    fail "CAT-II CONTAINER" "Compilers found (remove): $COMPILERS"
+fi
+
+if command -v dpkg > /dev/null 2>&1; then
+    PKG_COUNT=$(dpkg -l 2>/dev/null | grep -c "^ii" || echo "0")
+    if [ "$PKG_COUNT" -lt 100 ]; then
+        pass "CAT-II CONTAINER" "Minimal package count: $PKG_COUNT"
     else
-        warn "CONTAINER" "Container has capabilities: $CAP_EFF - verify only required caps are set"
+        fail "CAT-II CONTAINER" "Package count $PKG_COUNT is too high (must be < 100)"
     fi
 fi
 
-# Writeable filesystem check
-if touch /test_write_$$ 2>/dev/null; then
-    rm -f /test_write_$$
-    warn "CONTAINER" "Root filesystem is writable - consider read-only rootfs"
+if touch /test_rofs_$$ 2>/dev/null; then
+    rm -f /test_rofs_$$
+    fail "CAT-II CONTAINER" "Root filesystem is writable (should be read-only)"
 else
-    pass "CONTAINER" "Root filesystem is read-only"
+    pass "CAT-II CONTAINER" "Root filesystem is read-only"
 fi
 
-# =============================================================================
+if command -v ss > /dev/null 2>&1; then
+    LISTEN=$(ss -tlnp 2>/dev/null | grep -c "LISTEN" || echo "0")
+    if [ "$LISTEN" -eq 0 ]; then
+        pass "CAT-II SRG-OS-000095" "No listening TCP ports"
+    else
+        fail "CAT-II SRG-OS-000095" "$LISTEN listening TCP port(s) - verify all authorized"
+        ss -tlnp 2>/dev/null | tee -a "$REPORT"
+    fi
+else
+    fail "CAT-II SRG-OS-000095" "ss not available - cannot verify listening ports"
+fi
+
+if [ -f /proc/self/status ]; then
+    CAP_EFF=$(grep "^CapEff:" /proc/self/status 2>/dev/null | awk '{print $2}')
+    if [ "$CAP_EFF" = "0000000000000000" ]; then
+        pass "CAT-II CONTAINER" "No effective capabilities (fully dropped)"
+    else
+        fail "CAT-II CONTAINER" "Effective capabilities: $CAP_EFF (drop all unnecessary caps)"
+    fi
+fi
+
+if [ -f /etc/os-release ]; then
+    pass "CAT-II CONTAINER" "/etc/os-release present"
+else
+    fail "CAT-II CONTAINER" "/etc/os-release missing"
+fi
+
 header "SUMMARY"
-# =============================================================================
 
-TOTAL=$((PASS + FAIL + NA + WARN))
-
+TOTAL=$((PASS + FAIL))
 log ""
-log "${BOLD}======================================================================"
-log "  STIG Verification Results Summary"
-log "======================================================================"
+log "${BOLD}========================================================"
+log "  Results"
+log "========================================================"
 log "${GREEN}  PASS : $PASS${NC}"
 log "${RED}  FAIL : $FAIL${NC}"
-log "${YELLOW}  WARN : $WARN  (review required)${NC}"
-log "${YELLOW}  N/A  : $NA   (host-inherited controls)${NC}"
-log "${BOLD}  ────────────────────────────────"
-log "  TOTAL: $TOTAL checks${NC}"
-
-if [ $((PASS + FAIL)) -gt 0 ]; then
-    SCORE=$(( (PASS * 100) / (PASS + FAIL) ))
-    log ""
-    log "${BOLD}  Compliance Score (PASS / PASS+FAIL): ${SCORE}%${NC}"
+log "${BOLD}  ──────────────────────────────────────"
+log "  TOTAL: $TOTAL"
+if [ "$TOTAL" -gt 0 ]; then
+    SCORE=$(( (PASS * 100) / TOTAL ))
+    log "  Score: ${SCORE}%"
 fi
-
 log ""
-log "${YELLOW}  NOTE: WARN items require manual review."
-log "  N/A items are inherited from the container host and must"
-log "  be verified at the host/platform level separately."
-log "  Refer to DISA Container Hardening Process Guide Appendix C.${NC}"
-log "${BOLD}======================================================================"
-log "  Report saved to: $REPORT_FILE"
-log "======================================================================${NC}"
+log "  Report: $REPORT"
+log "========================================================${NC}"
 
 [ "$FAIL" -eq 0 ] && exit 0 || exit 2
