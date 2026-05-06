@@ -4,9 +4,7 @@ docker run --rm \
   -v $(pwd)/out:/out \
   --entrypoint sh \
   chainguard/openscap:latest \
-  -c "cp /usr/bin/oscap /target/usr/bin/oscap && \
-      cp -r /usr/share/xml/scap /target/usr/share/xml/scap && \
-      chroot /target oscap xccdf eval \
+  -c "oscap xccdf eval \
       --skip-cpe-check \
       --profile xccdf_org.ssgproject.content_profile_standard \
       --results /out/results.xml \
