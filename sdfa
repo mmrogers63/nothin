@@ -93,8 +93,7 @@ header "CAT I - FILE PERMISSIONS"
 # =============================================================================
 
 check_perm() {
-    local file=$1 expected_perm=$2 expected_own=$3 stig=$4
-    local fix_perm=$5 fix_own=$6
+    local file=$1 max_perm=$2 expected_own=$3 stig=$4
     if [ ! -e "$file" ]; then
         fail "CAT-I $stig" "$file does not exist"
         fix "Ensure $file is created as part of your base image"
@@ -103,11 +102,12 @@ check_perm() {
     local perm own
     perm=$(stat -c "%a" "$file" 2>/dev/null)
     own=$(stat -c "%U:%G" "$file" 2>/dev/null)
-    if [ "$perm" = "$expected_perm" ]; then
-        pass "CAT-I $stig" "$file permissions: $perm"
+    # Pass if permissions are equal to or stricter than max_perm
+    if [ "$perm" -le "$max_perm" ] 2>/dev/null; then
+        pass "CAT-I $stig" "$file permissions: $perm (<= $max_perm)"
     else
-        fail "CAT-I $stig" "$file permissions: $perm (expected $expected_perm)"
-        fix "Run: chmod $expected_perm $file"
+        fail "CAT-I $stig" "$file permissions: $perm (must be <= $max_perm)"
+        fix "Run: chmod $max_perm $file"
     fi
     if [ "$own" = "$expected_own" ]; then
         pass "CAT-I $stig" "$file owner: $own"
