@@ -1,0 +1,11 @@
+docker run --rm \
+  -v $(pwd)/rootfs:/target:ro \
+  -v $(pwd)/out:/out \
+  chainguard/openscap:latest \
+  xccdf eval \
+  --root /target \
+  --skip-cpe-check \
+  --profile xccdf_org.ssgproject.content_profile_standard \
+  --results /out/results.xml \
+  --report /out/report.html \
+  /usr/share/xml/scap/ssg/content/ssg-debian12-ds.xml
