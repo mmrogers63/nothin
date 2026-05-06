@@ -1,12 +1,14 @@
 docker run --rm \
   --platform linux/amd64 \
-  -v $(pwd)/rootfs:/target:ro \
+  -v $(pwd)/rootfs:/target \
   -v $(pwd)/out:/out \
+  --entrypoint sh \
   chainguard/openscap:latest \
-  xccdf eval \
-  --root /target \
-  --skip-cpe-check \
-  --profile xccdf_org.ssgproject.content_profile_standard \
-  --results /out/results.xml \
-  --report /out/report.html \
-  /usr/share/xml/scap/ssg/content/ssg-debian12-ds.xml
+  -c "cp /usr/bin/oscap /target/usr/bin/oscap && \
+      cp -r /usr/share/xml/scap /target/usr/share/xml/scap && \
+      chroot /target oscap xccdf eval \
+      --skip-cpe-check \
+      --profile xccdf_org.ssgproject.content_profile_standard \
+      --results /out/results.xml \
+      --report /out/report.html \
+      /usr/share/xml/scap/ssg/content/ssg-debian12-ds.xml"
