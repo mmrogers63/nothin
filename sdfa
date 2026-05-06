@@ -1,4 +1,5 @@
 docker run --rm \
+  --platform linux/amd64 \
   -v $(pwd)/rootfs:/target:ro \
   -v $(pwd)/out:/out \
   chainguard/openscap:latest \
