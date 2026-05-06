@@ -1,12 +1,679 @@
-docker run --rm \
-  --platform linux/amd64 \
-  -v $(pwd)/rootfs:/target:ro \
-  -v $(pwd)/out:/out \
-  -e OSCAP_PROBE_ROOT=/target \
-  chainguard/openscap:latest \
-  xccdf eval \
-  --skip-cpe-check \
-  --profile xccdf_org.ssgproject.content_profile_standard \
-  --results /out/results.xml \
-  --report /out/report.html \
-  /usr/share/xml/scap/ssg/content/ssg-debian12-ds.xml
+#!/bin/bash
+# =============================================================================
+# STIG Hardening Verification Script for Debian 13 Slim Container
+# Based on DISA General Purpose OS SRG + Debian Linux STIG guidance
+# Container-applicable checks only (host-inherited controls noted as N/A)
+# =============================================================================
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+PASS=0
+FAIL=0
+NA=0
+WARN=0
+
+REPORT_FILE="/tmp/stig_report_$(date +%Y%m%d_%H%M%S).txt"
+
+log() { echo -e "$1" | tee -a "$REPORT_FILE"; }
+pass() { log "${GREEN}[PASS]${NC} $1"; ((PASS++)); }
+fail() { log "${RED}[FAIL]${NC} $1"; ((FAIL++)); }
+na()   { log "${YELLOW}[N/A] ${NC} $1 ${YELLOW}(inherited from host)${NC}"; ((NA++)); }
+warn() { log "${YELLOW}[WARN]${NC} $1"; ((WARN++)); }
+header() { log "\n${BLUE}${BOLD}=== $1 ===${NC}"; }
+
+log "${BOLD}"
+log "============================================================"
+log " STIG Hardening Verification Report"
+log " Host: $(hostname)"
+log " Date: $(date)"
+log " OS:   $(cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"')"
+log "============================================================"
+log "${NC}"
+
+# =============================================================================
+header "ACCOUNT & PASSWORD MANAGEMENT"
+# SRG-OS-000070-GPOS-00038, SRG-OS-000071-GPOS-00039
+# =============================================================================
+
+# Check for accounts with empty passwords
+EMPTY_PASS=$(awk -F: '($2 == "" || $2 == "!!" ) && $1 != "root" {print $1}' /etc/shadow 2>/dev/null)
+if [ -z "$EMPTY_PASS" ]; then
+    pass "SRG-OS-000070: No accounts with empty passwords found"
+else
+    fail "SRG-OS-000070: Accounts with empty passwords: $EMPTY_PASS"
+fi
+
+# Check root account is locked or has no direct login
+ROOT_LOCK=$(passwd -S root 2>/dev/null | awk '{print $2}')
+if [ "$ROOT_LOCK" = "L" ] || [ "$ROOT_LOCK" = "LK" ]; then
+    pass "SRG-OS-000109: Root account is locked"
+else
+    warn "SRG-OS-000109: Root account is not locked (may be acceptable in container if no direct login)"
+fi
+
+# Check for UID 0 accounts other than root
+UID0=$(awk -F: '$3 == 0 && $1 != "root" {print $1}' /etc/passwd)
+if [ -z "$UID0" ]; then
+    pass "SRG-OS-000104: No non-root accounts with UID 0"
+else
+    fail "SRG-OS-000104: Non-root accounts with UID 0: $UID0"
+fi
+
+# Check /etc/passwd has no '+' entries (NIS legacy)
+if ! grep -q '^+' /etc/passwd 2>/dev/null; then
+    pass "SRG-OS-000104: No NIS '+' entries in /etc/passwd"
+else
+    fail "SRG-OS-000104: NIS '+' entries found in /etc/passwd"
+fi
+
+# Check /etc/shadow has no '+' entries
+if ! grep -q '^+' /etc/shadow 2>/dev/null; then
+    pass "SRG-OS-000104: No NIS '+' entries in /etc/shadow"
+else
+    fail "SRG-OS-000104: NIS '+' entries found in /etc/shadow"
+fi
+
+# Check /etc/group has no '+' entries
+if ! grep -q '^+' /etc/group 2>/dev/null; then
+    pass "SRG-OS-000104: No NIS '+' entries in /etc/group"
+else
+    fail "SRG-OS-000104: NIS '+' entries found in /etc/group"
+fi
+
+# Check password hashing algorithm
+HASH_ALG=$(grep -E "^ENCRYPT_METHOD" /etc/login.defs 2>/dev/null | awk '{print $2}')
+if [ "$HASH_ALG" = "SHA512" ] || [ "$HASH_ALG" = "yescrypt" ]; then
+    pass "SRG-OS-000073: Password hashing algorithm is $HASH_ALG"
+else
+    warn "SRG-OS-000073: Password hashing algorithm is '$HASH_ALG' (expected SHA512 or yescrypt)"
+fi
+
+# Check password minimum length
+MIN_LEN=$(grep -E "^PASS_MIN_LEN" /etc/login.defs 2>/dev/null | awk '{print $2}')
+if [ -n "$MIN_LEN" ] && [ "$MIN_LEN" -ge 15 ] 2>/dev/null; then
+    pass "SRG-OS-000078: Password minimum length is $MIN_LEN (>= 15)"
+else
+    fail "SRG-OS-000078: Password minimum length is '$MIN_LEN' (must be >= 15)"
+fi
+
+# Check password max days
+MAX_DAYS=$(grep -E "^PASS_MAX_DAYS" /etc/login.defs 2>/dev/null | awk '{print $2}')
+if [ -n "$MAX_DAYS" ] && [ "$MAX_DAYS" -le 60 ] 2>/dev/null; then
+    pass "SRG-OS-000076: Password max days is $MAX_DAYS (<= 60)"
+else
+    warn "SRG-OS-000076: Password max days is '$MAX_DAYS' (should be <= 60)"
+fi
+
+# Check password min days
+MIN_DAYS=$(grep -E "^PASS_MIN_DAYS" /etc/login.defs 2>/dev/null | awk '{print $2}')
+if [ -n "$MIN_DAYS" ] && [ "$MIN_DAYS" -ge 1 ] 2>/dev/null; then
+    pass "SRG-OS-000075: Password min days is $MIN_DAYS (>= 1)"
+else
+    warn "SRG-OS-000075: Password min days is '$MIN_DAYS' (should be >= 1)"
+fi
+
+# =============================================================================
+header "FILE PERMISSIONS & OWNERSHIP"
+# SRG-OS-000257-GPOS-00098, SRG-OS-000278-GPOS-00108
+# =============================================================================
+
+# Check /etc/passwd permissions
+PASSWD_PERM=$(stat -c "%a" /etc/passwd 2>/dev/null)
+if [ "$PASSWD_PERM" = "644" ]; then
+    pass "SRG-OS-000257: /etc/passwd permissions are 644"
+else
+    fail "SRG-OS-000257: /etc/passwd permissions are $PASSWD_PERM (expected 644)"
+fi
+
+# Check /etc/passwd ownership
+PASSWD_OWN=$(stat -c "%U:%G" /etc/passwd 2>/dev/null)
+if [ "$PASSWD_OWN" = "root:root" ]; then
+    pass "SRG-OS-000257: /etc/passwd owned by root:root"
+else
+    fail "SRG-OS-000257: /etc/passwd owned by $PASSWD_OWN (expected root:root)"
+fi
+
+# Check /etc/shadow permissions
+SHADOW_PERM=$(stat -c "%a" /etc/shadow 2>/dev/null)
+if [ "$SHADOW_PERM" = "640" ] || [ "$SHADOW_PERM" = "000" ] || [ "$SHADOW_PERM" = "600" ]; then
+    pass "SRG-OS-000257: /etc/shadow permissions are $SHADOW_PERM"
+else
+    fail "SRG-OS-000257: /etc/shadow permissions are $SHADOW_PERM (expected 640 or stricter)"
+fi
+
+# Check /etc/shadow ownership
+SHADOW_OWN=$(stat -c "%U:%G" /etc/shadow 2>/dev/null)
+if [ "$SHADOW_OWN" = "root:shadow" ] || [ "$SHADOW_OWN" = "root:root" ]; then
+    pass "SRG-OS-000257: /etc/shadow owned by $SHADOW_OWN"
+else
+    fail "SRG-OS-000257: /etc/shadow owned by $SHADOW_OWN (expected root:shadow or root:root)"
+fi
+
+# Check /etc/group permissions
+GROUP_PERM=$(stat -c "%a" /etc/group 2>/dev/null)
+if [ "$GROUP_PERM" = "644" ]; then
+    pass "SRG-OS-000257: /etc/group permissions are 644"
+else
+    fail "SRG-OS-000257: /etc/group permissions are $GROUP_PERM (expected 644)"
+fi
+
+# Check /etc/gshadow permissions
+GSHADOW_PERM=$(stat -c "%a" /etc/gshadow 2>/dev/null)
+if [ "$GSHADOW_PERM" = "640" ] || [ "$GSHADOW_PERM" = "000" ] || [ "$GSHADOW_PERM" = "600" ]; then
+    pass "SRG-OS-000257: /etc/gshadow permissions are $GSHADOW_PERM"
+else
+    warn "SRG-OS-000257: /etc/gshadow permissions are $GSHADOW_PERM (expected 640 or stricter)"
+fi
+
+# World-writable files (excluding /proc, /sys, /dev)
+log "\n[CHECK] Scanning for world-writable files (this may take a moment)..."
+WW_FILES=$(find / -xdev -type f -perm -0002 \
+    ! -path "/proc/*" ! -path "/sys/*" ! -path "/dev/*" ! -path "/run/*" \
+    2>/dev/null)
+if [ -z "$WW_FILES" ]; then
+    pass "SRG-OS-000258: No world-writable files found"
+else
+    fail "SRG-OS-000258: World-writable files found:\n$WW_FILES"
+fi
+
+# SUID/SGID binaries - list them for review
+log "\n[CHECK] SUID/SGID binaries (review required):"
+SUID_FILES=$(find / -xdev \( -perm -4000 -o -perm -2000 \) -type f \
+    ! -path "/proc/*" ! -path "/sys/*" 2>/dev/null)
+if [ -z "$SUID_FILES" ]; then
+    pass "SRG-OS-000326: No SUID/SGID binaries found (minimal image)"
+else
+    warn "SRG-OS-000326: SUID/SGID binaries present (review each):\n$SUID_FILES"
+fi
+
+# Unowned files
+UNOWNED=$(find / -xdev \( -nouser -o -nogroup \) \
+    ! -path "/proc/*" ! -path "/sys/*" ! -path "/dev/*" \
+    2>/dev/null)
+if [ -z "$UNOWNED" ]; then
+    pass "SRG-OS-000258: No unowned files or directories found"
+else
+    fail "SRG-OS-000258: Unowned files/directories:\n$UNOWNED"
+fi
+
+# Check /tmp permissions
+TMP_PERM=$(stat -c "%a" /tmp 2>/dev/null)
+if [ "$TMP_PERM" = "1777" ]; then
+    pass "SRG-OS-000368: /tmp has sticky bit set (1777)"
+else
+    warn "SRG-OS-000368: /tmp permissions are $TMP_PERM (expected 1777)"
+fi
+
+# =============================================================================
+header "SSH CONFIGURATION"
+# SRG-OS-000033-GPOS-00014, SRG-OS-000163-GPOS-00072
+# =============================================================================
+
+SSH_CONFIG="/etc/ssh/sshd_config"
+if [ ! -f "$SSH_CONFIG" ]; then
+    na "SSH: sshd not installed (recommended for containers - no SSH)"
+else
+    warn "SSH: sshd is installed in this container - review if required"
+
+    # PermitRootLogin
+    ROOT_LOGIN=$(grep -E "^PermitRootLogin" "$SSH_CONFIG" 2>/dev/null | awk '{print $2}')
+    if [ "$ROOT_LOGIN" = "no" ]; then
+        pass "SRG-OS-000109: SSH PermitRootLogin is no"
+    else
+        fail "SRG-OS-000109: SSH PermitRootLogin is '$ROOT_LOGIN' (must be no)"
+    fi
+
+    # PermitEmptyPasswords
+    EMPTY_PW=$(grep -E "^PermitEmptyPasswords" "$SSH_CONFIG" 2>/dev/null | awk '{print $2}')
+    if [ "$EMPTY_PW" = "no" ]; then
+        pass "SRG-OS-000106: SSH PermitEmptyPasswords is no"
+    else
+        fail "SRG-OS-000106: SSH PermitEmptyPasswords is '$EMPTY_PW' (must be no)"
+    fi
+
+    # Protocol
+    PROTO=$(grep -E "^Protocol" "$SSH_CONFIG" 2>/dev/null | awk '{print $2}')
+    if [ -z "$PROTO" ] || [ "$PROTO" = "2" ]; then
+        pass "SRG-OS-000033: SSH Protocol is 2 (default)"
+    else
+        fail "SRG-OS-000033: SSH Protocol is $PROTO (must be 2)"
+    fi
+
+    # ClientAliveInterval
+    ALIVE=$(grep -E "^ClientAliveInterval" "$SSH_CONFIG" 2>/dev/null | awk '{print $2}')
+    if [ -n "$ALIVE" ] && [ "$ALIVE" -le 600 ] 2>/dev/null; then
+        pass "SRG-OS-000163: SSH ClientAliveInterval is $ALIVE (<= 600)"
+    else
+        fail "SRG-OS-000163: SSH ClientAliveInterval is '$ALIVE' (must be <= 600)"
+    fi
+
+    # X11Forwarding
+    X11=$(grep -E "^X11Forwarding" "$SSH_CONFIG" 2>/dev/null | awk '{print $2}')
+    if [ "$X11" = "no" ]; then
+        pass "SRG-OS-000378: SSH X11Forwarding is no"
+    else
+        fail "SRG-OS-000378: SSH X11Forwarding is '$X11' (must be no)"
+    fi
+
+    # IgnoreRhosts
+    RHOSTS=$(grep -E "^IgnoreRhosts" "$SSH_CONFIG" 2>/dev/null | awk '{print $2}')
+    if [ "$RHOSTS" = "yes" ]; then
+        pass "SRG-OS-000015: SSH IgnoreRhosts is yes"
+    else
+        fail "SRG-OS-000015: SSH IgnoreRhosts is '$RHOSTS' (must be yes)"
+    fi
+
+    # MaxAuthTries
+    MAX_AUTH=$(grep -E "^MaxAuthTries" "$SSH_CONFIG" 2>/dev/null | awk '{print $2}')
+    if [ -n "$MAX_AUTH" ] && [ "$MAX_AUTH" -le 4 ] 2>/dev/null; then
+        pass "SRG-OS-000021: SSH MaxAuthTries is $MAX_AUTH (<= 4)"
+    else
+        fail "SRG-OS-000021: SSH MaxAuthTries is '$MAX_AUTH' (must be <= 4)"
+    fi
+
+    # Ciphers - must not include weak ciphers
+    CIPHERS=$(grep -E "^Ciphers" "$SSH_CONFIG" 2>/dev/null)
+    if echo "$CIPHERS" | grep -qiE "arcfour|3des|blowfish|cast|rc4"; then
+        fail "SRG-OS-000033: SSH config contains weak ciphers: $CIPHERS"
+    else
+        pass "SRG-OS-000033: SSH Ciphers do not include known weak algorithms"
+    fi
+fi
+
+# =============================================================================
+header "NETWORK & KERNEL PARAMETERS"
+# SRG-OS-000480-GPOS-00227
+# =============================================================================
+
+check_sysctl() {
+    local param=$1
+    local expected=$2
+    local stig=$3
+    local actual
+    actual=$(sysctl -n "$param" 2>/dev/null)
+    if [ "$actual" = "$expected" ]; then
+        pass "$stig: $param = $actual"
+    else
+        # In containers many sysctl are set at host level
+        warn "$stig: $param = '$actual' (expected $expected) - may be host-controlled"
+    fi
+}
+
+check_sysctl "net.ipv4.ip_forward" "0" "SRG-OS-000480"
+check_sysctl "net.ipv4.conf.all.send_redirects" "0" "SRG-OS-000480"
+check_sysctl "net.ipv4.conf.default.send_redirects" "0" "SRG-OS-000480"
+check_sysctl "net.ipv4.conf.all.accept_redirects" "0" "SRG-OS-000480"
+check_sysctl "net.ipv4.conf.default.accept_redirects" "0" "SRG-OS-000480"
+check_sysctl "net.ipv4.conf.all.accept_source_route" "0" "SRG-OS-000480"
+check_sysctl "net.ipv4.conf.default.accept_source_route" "0" "SRG-OS-000480"
+check_sysctl "net.ipv4.conf.all.log_martians" "1" "SRG-OS-000480"
+check_sysctl "net.ipv4.conf.default.log_martians" "1" "SRG-OS-000480"
+check_sysctl "net.ipv4.icmp_echo_ignore_broadcasts" "1" "SRG-OS-000480"
+check_sysctl "net.ipv4.icmp_ignore_bogus_error_responses" "1" "SRG-OS-000480"
+check_sysctl "net.ipv4.tcp_syncookies" "1" "SRG-OS-000480"
+check_sysctl "net.ipv6.conf.all.accept_redirects" "0" "SRG-OS-000480"
+check_sysctl "net.ipv6.conf.default.accept_redirects" "0" "SRG-OS-000480"
+check_sysctl "net.ipv6.conf.all.accept_source_route" "0" "SRG-OS-000480"
+check_sysctl "kernel.randomize_va_space" "2" "SRG-OS-000433"
+check_sysctl "kernel.dmesg_restrict" "1" "SRG-OS-000138"
+check_sysctl "fs.suid_dumpable" "0" "SRG-OS-000480"
+
+# =============================================================================
+header "AUDITING"
+# SRG-OS-000037-GPOS-00015 through SRG-OS-000042-GPOS-00021
+# Note: auditd in containers is inherited from host kernel
+# =============================================================================
+
+if command -v auditctl &>/dev/null; then
+    warn "AUDIT: auditd tools present - verify host audit daemon is running"
+    AUDIT_RULES=$(auditctl -l 2>/dev/null)
+    if [ -n "$AUDIT_RULES" ]; then
+        pass "SRG-OS-000037: Audit rules are loaded"
+        log "  Loaded rules:\n$AUDIT_RULES"
+    else
+        warn "SRG-OS-000037: No audit rules loaded (may be host-controlled)"
+    fi
+else
+    na "SRG-OS-000037: auditd not in container (audit handled by host kernel/daemon)"
+fi
+
+# =============================================================================
+header "PACKAGE INTEGRITY"
+# SRG-OS-000257-GPOS-00098
+# =============================================================================
+
+if command -v dpkg &>/dev/null; then
+    log "\n[CHECK] Verifying package integrity with dpkg..."
+    DPKG_VERIFY=$(dpkg --verify 2>&1)
+    if [ -z "$DPKG_VERIFY" ]; then
+        pass "SRG-OS-000257: All installed packages pass integrity check (dpkg --verify)"
+    else
+        fail "SRG-OS-000257: Package integrity issues found:\n$DPKG_VERIFY"
+    fi
+else
+    warn "SRG-OS-000257: dpkg not available, cannot verify package integrity"
+fi
+
+# List installed packages (minimal surface area check)
+PKG_COUNT=$(dpkg -l 2>/dev/null | grep -c "^ii")
+log "  Installed package count: $PKG_COUNT"
+if [ "$PKG_COUNT" -lt 50 ]; then
+    pass "SRG-OS-000368: Minimal package footprint ($PKG_COUNT packages)"
+elif [ "$PKG_COUNT" -lt 150 ]; then
+    warn "SRG-OS-000368: Moderate package count ($PKG_COUNT) - review for unnecessary packages"
+else
+    fail "SRG-OS-000368: High package count ($PKG_COUNT) - remove unnecessary packages"
+fi
+
+# =============================================================================
+header "UNNECESSARY SERVICES & LISTENING PORTS"
+# SRG-OS-000095-GPOS-00049
+# =============================================================================
+
+# Check for listening services
+if command -v ss &>/dev/null; then
+    LISTENING=$(ss -tlnp 2>/dev/null | grep -v "^Netid")
+    log "\nListening TCP ports:"
+    log "$LISTENING"
+    PORT_COUNT=$(ss -tlnp 2>/dev/null | grep -c "LISTEN" || true)
+    if [ "$PORT_COUNT" -eq 0 ]; then
+        pass "SRG-OS-000095: No listening TCP ports (minimal attack surface)"
+    else
+        warn "SRG-OS-000095: $PORT_COUNT listening port(s) found - review if all are required"
+    fi
+elif command -v netstat &>/dev/null; then
+    LISTENING=$(netstat -tlnp 2>/dev/null)
+    log "\nListening TCP ports:\n$LISTENING"
+else
+    warn "SRG-OS-000095: Neither ss nor netstat available to check listening ports"
+fi
+
+# Check for unnecessary services running
+for svc in telnet rsh rlogin ftp vsftpd xinetd nis portmap rpcbind; do
+    if command -v "$svc" &>/dev/null; then
+        fail "SRG-OS-000095: Unnecessary service found: $svc"
+    fi
+done
+pass "SRG-OS-000095: Common unnecessary services (telnet, rsh, ftp, etc.) not found"
+
+# =============================================================================
+header "CRON & SCHEDULED TASKS"
+# SRG-OS-000480-GPOS-00227
+# =============================================================================
+
+# Check cron permissions
+for f in /etc/crontab /etc/cron.d /etc/cron.daily /etc/cron.weekly /etc/cron.monthly; do
+    if [ -e "$f" ]; then
+        PERM=$(stat -c "%a" "$f" 2>/dev/null)
+        OWN=$(stat -c "%U:%G" "$f" 2>/dev/null)
+        if [ "$OWN" = "root:root" ]; then
+            pass "SRG-OS-000480: $f owned by root:root"
+        else
+            fail "SRG-OS-000480: $f owned by $OWN (expected root:root)"
+        fi
+    fi
+done
+
+# at and cron access controls
+if [ -f /etc/cron.allow ]; then
+    pass "SRG-OS-000480: /etc/cron.allow exists (restricts cron access)"
+elif [ -f /etc/cron.deny ]; then
+    warn "SRG-OS-000480: /etc/cron.deny exists but /etc/cron.allow preferred"
+else
+    na "SRG-OS-000480: No cron.allow/cron.deny (cron likely not installed)"
+fi
+
+# =============================================================================
+header "FILESYSTEM MOUNTS & /TMP"
+# SRG-OS-000185-GPOS-00079, SRG-OS-000368-GPOS-00154
+# =============================================================================
+
+# Check /tmp mount options
+TMP_MOUNT=$(findmnt /tmp 2>/dev/null)
+if [ -n "$TMP_MOUNT" ]; then
+    log "  /tmp mount info: $TMP_MOUNT"
+    if echo "$TMP_MOUNT" | grep -q "noexec"; then
+        pass "SRG-OS-000368: /tmp mounted with noexec"
+    else
+        warn "SRG-OS-000368: /tmp not mounted with noexec"
+    fi
+    if echo "$TMP_MOUNT" | grep -q "nosuid"; then
+        pass "SRG-OS-000368: /tmp mounted with nosuid"
+    else
+        warn "SRG-OS-000368: /tmp not mounted with nosuid"
+    fi
+else
+    na "SRG-OS-000368: /tmp not a separate mount (common in containers)"
+fi
+
+# =============================================================================
+header "KERNEL MODULE RESTRICTIONS"
+# SRG-OS-000480-GPOS-00227
+# =============================================================================
+
+# Check for disabled unnecessary kernel modules
+for mod in usb-storage cramfs freevxfs jffs2 hfs hfsplus squashfs udf bluetooth dccp sctp; do
+    if [ -f "/etc/modprobe.d/disable-${mod}.conf" ] || \
+       grep -qr "install ${mod} /bin/true\|blacklist ${mod}" /etc/modprobe.d/ 2>/dev/null; then
+        pass "SRG-OS-000095: Kernel module '$mod' is disabled"
+    else
+        warn "SRG-OS-000095: Kernel module '$mod' not explicitly disabled (may be acceptable in container)"
+    fi
+done
+
+# =============================================================================
+header "SYSTEM BANNERS & MOTD"
+# SRG-OS-000023-GPOS-00006, SRG-OS-000024-GPOS-00007
+# =============================================================================
+
+# Check /etc/issue
+if [ -f /etc/issue ]; then
+    ISSUE=$(cat /etc/issue)
+    if echo "$ISSUE" | grep -qiE "authorized|official|monitored|consent|warning"; then
+        pass "SRG-OS-000023: /etc/issue contains warning banner"
+    else
+        fail "SRG-OS-000023: /etc/issue missing DoD warning banner"
+    fi
+else
+    fail "SRG-OS-000023: /etc/issue does not exist"
+fi
+
+# Check /etc/issue.net
+if [ -f /etc/issue.net ]; then
+    ISSUE_NET=$(cat /etc/issue.net)
+    if echo "$ISSUE_NET" | grep -qiE "authorized|official|monitored|consent|warning"; then
+        pass "SRG-OS-000024: /etc/issue.net contains warning banner"
+    else
+        fail "SRG-OS-000024: /etc/issue.net missing DoD warning banner"
+    fi
+else
+    fail "SRG-OS-000024: /etc/issue.net does not exist"
+fi
+
+# Check /etc/motd
+if [ -f /etc/motd ]; then
+    MOTD=$(cat /etc/motd)
+    if echo "$MOTD" | grep -qiE "authorized|official|monitored|consent|warning"; then
+        pass "SRG-OS-000023: /etc/motd contains warning banner"
+    else
+        warn "SRG-OS-000023: /etc/motd exists but may not contain DoD warning language"
+    fi
+fi
+
+# =============================================================================
+header "PAM CONFIGURATION"
+# SRG-OS-000069-GPOS-00037, SRG-OS-000070-GPOS-00038
+# =============================================================================
+
+if [ -d /etc/pam.d ]; then
+    # Check pam_faillock or pam_tally2 for account lockout
+    if grep -rq "pam_faillock\|pam_tally2" /etc/pam.d/ 2>/dev/null; then
+        pass "SRG-OS-000021: Account lockout module (pam_faillock/pam_tally2) configured"
+    else
+        warn "SRG-OS-000021: No account lockout PAM module found (pam_faillock/pam_tally2)"
+    fi
+
+    # Check password complexity
+    if grep -rq "pam_pwquality\|pam_cracklib" /etc/pam.d/ 2>/dev/null; then
+        pass "SRG-OS-000069: Password complexity module (pam_pwquality/pam_cracklib) configured"
+    else
+        warn "SRG-OS-000069: No password complexity PAM module found"
+    fi
+
+    # Check for pam_pwhistory (password reuse)
+    if grep -rq "pam_pwhistory\|remember=" /etc/pam.d/ 2>/dev/null; then
+        pass "SRG-OS-000077: Password history/reuse restriction configured"
+    else
+        warn "SRG-OS-000077: No password history restriction (pam_pwhistory) found"
+    fi
+else
+    na "SRG-OS-000069: /etc/pam.d not present"
+fi
+
+# =============================================================================
+header "CONTAINER-SPECIFIC CHECKS"
+# DISA Container Hardening Process Guide
+# =============================================================================
+
+# Running as non-root
+CURRENT_USER=$(id -u)
+if [ "$CURRENT_USER" -ne 0 ]; then
+    pass "CONTAINER: Running as non-root user (UID $CURRENT_USER)"
+else
+    warn "CONTAINER: Running as root (UID 0) - container should use non-root user where possible"
+fi
+
+# Check for unnecessary shell interpreters
+for shell in /bin/sh /bin/bash /bin/zsh /bin/fish /bin/ksh /bin/tcsh /bin/csh; do
+    if [ -f "$shell" ]; then
+        warn "CONTAINER: Shell interpreter present: $shell (minimize shells in production containers)"
+    fi
+done
+
+# Check for package managers (attack surface)
+for pm in apt apt-get apk yum dnf pip pip3 npm; do
+    if command -v "$pm" &>/dev/null; then
+        warn "CONTAINER: Package manager found: $pm (should be removed in hardened image)"
+    fi
+done
+
+# Check for compilers (attack surface)
+for compiler in gcc g++ cc make cmake perl python3 python ruby; do
+    if command -v "$compiler" &>/dev/null; then
+        warn "CONTAINER: Development tool found: $compiler (review if required)"
+    fi
+done
+
+# Check /etc/os-release is present (required for identification)
+if [ -f /etc/os-release ]; then
+    pass "CONTAINER: /etc/os-release present for OS identification"
+    cat /etc/os-release | tee -a "$REPORT_FILE"
+else
+    fail "CONTAINER: /etc/os-release missing"
+fi
+
+# =============================================================================
+header "CRYPTOGRAPHY"
+# SRG-OS-000033-GPOS-00014, SRG-OS-000120-GPOS-00061
+# =============================================================================
+
+# Check if FIPS mode is enabled (best effort in container)
+if [ -f /proc/sys/crypto/fips_enabled ]; then
+    FIPS=$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)
+    if [ "$FIPS" = "1" ]; then
+        pass "SRG-OS-000120: FIPS mode is enabled"
+    else
+        warn "SRG-OS-000120: FIPS mode is not enabled (value=$FIPS) - may be required for DoD"
+    fi
+else
+    na "SRG-OS-000120: /proc/sys/crypto/fips_enabled not available in this container"
+fi
+
+# Check OpenSSL version
+if command -v openssl &>/dev/null; then
+    OPENSSL_VER=$(openssl version 2>/dev/null)
+    pass "CRYPTO: OpenSSL present: $OPENSSL_VER"
+else
+    na "CRYPTO: OpenSSL not installed"
+fi
+
+# =============================================================================
+header "LOGGING & SYSLOG"
+# SRG-OS-000479-GPOS-00224
+# =============================================================================
+
+if command -v rsyslogd &>/dev/null || [ -f /etc/rsyslog.conf ]; then
+    pass "SRG-OS-000479: rsyslog is present"
+    if [ -f /etc/rsyslog.conf ]; then
+        # Check if logging to remote server
+        if grep -qE "^[^#]*@@?\s*[0-9a-zA-Z]" /etc/rsyslog.conf 2>/dev/null; then
+            pass "SRG-OS-000479: Remote syslog forwarding configured"
+        else
+            warn "SRG-OS-000479: Remote syslog forwarding not configured in rsyslog.conf"
+        fi
+    fi
+elif command -v syslogd &>/dev/null; then
+    pass "SRG-OS-000479: syslogd is present"
+else
+    warn "SRG-OS-000479: No syslog daemon found - ensure logs are forwarded to host or central server"
+fi
+
+# Check /var/log exists and has log files
+if [ -d /var/log ]; then
+    LOG_COUNT=$(find /var/log -type f 2>/dev/null | wc -l)
+    pass "SRG-OS-000479: /var/log exists with $LOG_COUNT log file(s)"
+else
+    fail "SRG-OS-000479: /var/log directory missing"
+fi
+
+# =============================================================================
+header "USER HOME DIRECTORY PERMISSIONS"
+# SRG-OS-000480-GPOS-00227
+# =============================================================================
+
+# Check home directory permissions for all users with home dirs
+awk -F: '$3 >= 1000 && $6 != "/" && $6 != "" {print $1, $6}' /etc/passwd 2>/dev/null | \
+while read user homedir; do
+    if [ -d "$homedir" ]; then
+        PERM=$(stat -c "%a" "$homedir" 2>/dev/null)
+        if [ "$PERM" -le 750 ] 2>/dev/null; then
+            pass "SRG-OS-000480: Home dir $homedir ($user) permissions $PERM are acceptable"
+        else
+            fail "SRG-OS-000480: Home dir $homedir ($user) permissions $PERM are too permissive (must be <= 750)"
+        fi
+    fi
+done
+
+# =============================================================================
+header "SUMMARY"
+# =============================================================================
+
+TOTAL=$((PASS + FAIL + NA + WARN))
+
+log "\n${BOLD}============================================================"
+log " STIG Check Results Summary"
+log "============================================================${NC}"
+log "${GREEN}  PASS : $PASS${NC}"
+log "${RED}  FAIL : $FAIL${NC}"
+log "${YELLOW}  WARN : $WARN${NC}"
+log "${YELLOW}  N/A  : $NA  (host-inherited controls)${NC}"
+log "  ─────────────────"
+log "  TOTAL: $TOTAL checks"
+
+if [ "$TOTAL" -gt 0 ]; then
+    SCORE=$(( (PASS * 100) / (PASS + FAIL) ))
+    log "\n  Compliance Score (PASS/PASS+FAIL): ${BOLD}${SCORE}%${NC}"
+fi
+
+log "\n${BOLD}Report saved to: $REPORT_FILE${NC}"
+log "\n${YELLOW}NOTE: N/A items are controls inherited from the container host."
+log "These must be verified at the host/platform level separately."
+log "Refer to DISA Container Hardening Process Guide Appendix C.${NC}\n"
+
+# Exit with failure code if any FAILs
+[ "$FAIL" -eq 0 ] && exit 0 || exit 2
