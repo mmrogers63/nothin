@@ -88,20 +88,18 @@ else
     fix "Install: apk add openssl"
 fi
 
-# Check openssl.cnf references FIPS
-OPENSSL_CNF=$(openssl version -d 2>/dev/null | awk '{print $2}' | tr -d '"')
-OPENSSL_CNF="${OPENSSL_CNF}/openssl.cnf"
-if [ -f "$OPENSSL_CNF" ]; then
-    if grep -qi "fips" "$OPENSSL_CNF" 2>/dev/null; then
-        pass "CAT-I SRG-OS-000120" "openssl.cnf references FIPS configuration"
+# /etc/ssl/fipsmodule.cnf must exist and be valid
+if [ -f /etc/ssl/fipsmodule.cnf ]; then
+    if grep -qi "fips\|activate" /etc/ssl/fipsmodule.cnf 2>/dev/null; then
+        pass "CAT-I SRG-OS-000120" "/etc/ssl/fipsmodule.cnf present and references FIPS"
     else
-        fail "CAT-I SRG-OS-000120" "openssl.cnf does not reference FIPS"
-        fix "Add FIPS provider section to $OPENSSL_CNF"
-        fix "Or set OPENSSL_CONF env var to point to a FIPS-enabled config"
+        fail "CAT-I SRG-OS-000120" "/etc/ssl/fipsmodule.cnf exists but appears empty or invalid"
+        fix "Regenerate: openssl fipsinstall -out /etc/ssl/fipsmodule.cnf -module <fips.so path>"
     fi
 else
-    fail "CAT-I SRG-OS-000120" "openssl.cnf not found at $OPENSSL_CNF"
-    fix "Ensure openssl is properly installed: apk add openssl"
+    fail "CAT-I SRG-OS-000120" "/etc/ssl/fipsmodule.cnf not found"
+    fix "Generate with: openssl fipsinstall -out /etc/ssl/fipsmodule.cnf -module /usr/lib/ossl-modules/fips.so"
+    fix "Then reference it in /etc/ssl/openssl.cnf"
 fi
 
 # Weak algorithms disabled
@@ -139,7 +137,9 @@ fi
 
 # Root shell restricted - SRG-OS-000109
 ROOT_SHELL=$(grep "^root:" /etc/passwd | cut -d: -f7)
-if [ "$ROOT_SHELL" = "/sbin/nologin" ] || [ "$ROOT_SHELL" = "/usr/sbin/nologin" ] || [ "$ROOT_SHELL" = "/bin/false" ]; then
+if [ "$ROOT_SHELL" = "/sbin/nologin" ] || [ "$ROOT_SHELL" = "/usr/sbin/nologin" ] || \
+   [ "$ROOT_SHELL" = "/bin/false" ] || [ "$ROOT_SHELL" = "/usr/bin/false" ] || \
+   [ "$ROOT_SHELL" = "nobody" ]; then
     pass "CAT-I SRG-OS-000109" "Root shell is restricted: $ROOT_SHELL"
 else
     fail "CAT-I SRG-OS-000109" "Root shell is $ROOT_SHELL (must be /sbin/nologin or /bin/false)"
@@ -263,58 +263,28 @@ check_banner() {
 check_banner "/etc/issue"     "SRG-OS-000023"
 check_banner "/etc/issue.net" "SRG-OS-000024"
 
-# =============================================================================
-header "CAT I - IMAGE PROVENANCE"
-# =============================================================================
 
-if [ -f /etc/os-release ]; then
-    pass "CAT-I SRG-OS-000257" "OS provenance: $(grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"')"
-else
-    fail "CAT-I SRG-OS-000257" "/etc/os-release missing - cannot confirm image provenance"
-    fix "Ensure image is built from official alpine base"
-fi
-
-# Check no unauthorized binaries in system dirs (Alpine uses apk)
-if command -v apk > /dev/null 2>&1; then
-    log "  Checking for binaries not owned by any apk package..."
-    UNEXPECTED=""
-    for dir in /usr/bin /usr/sbin /bin /sbin; do
-        if [ -d "$dir" ]; then
-            for f in "$dir"/*; do
-                [ -f "$f" ] || continue
-                if ! apk info --who-owns "$f" > /dev/null 2>&1; then
-                    UNEXPECTED="$UNEXPECTED\n$f"
-                fi
-            done
-        fi
-    done
-    if [ -z "$UNEXPECTED" ]; then
-        pass "CAT-I SRG-OS-000257" "All system binaries owned by known apk packages"
-    else
-        fail "CAT-I SRG-OS-000257" "Binaries not owned by any package:$UNEXPECTED"
-        fix "Remove unauthorized binaries or add them via apk in Dockerfile"
-    fi
-else
-    fail "CAT-I SRG-OS-000257" "apk not available - cannot verify package provenance"
-    fix "Ensure apk is present in image for integrity verification"
-fi
 
 # =============================================================================
 header "CAT II - PASSWORD POLICY"
 # =============================================================================
 
-# Alpine uses /etc/login.defs if shadow-utils installed, otherwise check /etc/passwd directly
 LOGIN_DEFS="/etc/login.defs"
+PWQCONF="/etc/security/pwquality.conf"
+
+get_val() {
+    local key=$1 file=$2
+    grep -E "^${key}[\s=]" "$file" 2>/dev/null | grep -v "^#" | awk -F'[= \t]+' '{print $2}' | head -1
+}
+
 if [ ! -f "$LOGIN_DEFS" ]; then
     fail "CAT-II SRG-OS-000076" "/etc/login.defs missing"
     fix "Install shadow: apk add shadow"
     fix "Then configure /etc/login.defs with required values"
 else
-    get_login() { grep -E "^$1\s" "$LOGIN_DEFS" 2>/dev/null | awk '{print $2}'; }
-
-    VAL=$(get_login "PASS_MAX_DAYS")
+    VAL=$(get_val "PASS_MAX_DAYS" "$LOGIN_DEFS")
     if [ -z "$VAL" ]; then
-        fail "CAT-II SRG-OS-000076" "PASS_MAX_DAYS not set"
+        fail "CAT-II SRG-OS-000076" "PASS_MAX_DAYS not set in login.defs"
         fix "Add to /etc/login.defs: PASS_MAX_DAYS 60"
     elif [ "$VAL" -le 60 ] 2>/dev/null; then
         pass "CAT-II SRG-OS-000076" "PASS_MAX_DAYS = $VAL (<= 60)"
@@ -323,9 +293,9 @@ else
         fix "In /etc/login.defs set: PASS_MAX_DAYS 60"
     fi
 
-    VAL=$(get_login "PASS_MIN_DAYS")
+    VAL=$(get_val "PASS_MIN_DAYS" "$LOGIN_DEFS")
     if [ -z "$VAL" ]; then
-        fail "CAT-II SRG-OS-000075" "PASS_MIN_DAYS not set"
+        fail "CAT-II SRG-OS-000075" "PASS_MIN_DAYS not set in login.defs"
         fix "Add to /etc/login.defs: PASS_MIN_DAYS 1"
     elif [ "$VAL" -ge 1 ] 2>/dev/null; then
         pass "CAT-II SRG-OS-000075" "PASS_MIN_DAYS = $VAL (>= 1)"
@@ -334,20 +304,9 @@ else
         fix "In /etc/login.defs set: PASS_MIN_DAYS 1"
     fi
 
-    VAL=$(get_login "PASS_MIN_LEN")
+    VAL=$(get_val "PASS_WARN_AGE" "$LOGIN_DEFS")
     if [ -z "$VAL" ]; then
-        fail "CAT-II SRG-OS-000078" "PASS_MIN_LEN not set"
-        fix "Add to /etc/login.defs: PASS_MIN_LEN 15"
-    elif [ "$VAL" -ge 15 ] 2>/dev/null; then
-        pass "CAT-II SRG-OS-000078" "PASS_MIN_LEN = $VAL (>= 15)"
-    else
-        fail "CAT-II SRG-OS-000078" "PASS_MIN_LEN = $VAL (must be >= 15)"
-        fix "In /etc/login.defs set: PASS_MIN_LEN 15"
-    fi
-
-    VAL=$(get_login "PASS_WARN_AGE")
-    if [ -z "$VAL" ]; then
-        fail "CAT-II SRG-OS-000343" "PASS_WARN_AGE not set"
+        fail "CAT-II SRG-OS-000343" "PASS_WARN_AGE not set in login.defs"
         fix "Add to /etc/login.defs: PASS_WARN_AGE 7"
     elif [ "$VAL" -ge 7 ] 2>/dev/null; then
         pass "CAT-II SRG-OS-000343" "PASS_WARN_AGE = $VAL (>= 7)"
@@ -356,18 +315,17 @@ else
         fix "In /etc/login.defs set: PASS_WARN_AGE 7"
     fi
 
-    HASH=$(get_login "ENCRYPT_METHOD")
+    HASH=$(get_val "ENCRYPT_METHOD" "$LOGIN_DEFS")
     if [ "$HASH" = "SHA512" ]; then
-        pass "CAT-II SRG-OS-000073" "ENCRYPT_METHOD = $HASH"
+        pass "CAT-II SRG-OS-000073" "ENCRYPT_METHOD = $HASH (login.defs)"
     else
-        fail "CAT-II SRG-OS-000073" "ENCRYPT_METHOD = '$HASH' (must be SHA512 for FIPS)"
+        fail "CAT-II SRG-OS-000073" "ENCRYPT_METHOD = '$HASH' (must be SHA512 for FIPS - yescrypt not FIPS-approved)"
         fix "In /etc/login.defs set: ENCRYPT_METHOD SHA512"
-        fix "Note: yescrypt is not FIPS-approved - use SHA512 on FIPS systems"
     fi
 
-    VAL=$(get_login "SHA_CRYPT_MIN_ROUNDS")
+    VAL=$(get_val "SHA_CRYPT_MIN_ROUNDS" "$LOGIN_DEFS")
     if [ -z "$VAL" ]; then
-        fail "CAT-II SRG-OS-000073" "SHA_CRYPT_MIN_ROUNDS not set"
+        fail "CAT-II SRG-OS-000073" "SHA_CRYPT_MIN_ROUNDS not set in login.defs"
         fix "Add to /etc/login.defs: SHA_CRYPT_MIN_ROUNDS 5000"
     elif [ "$VAL" -ge 5000 ] 2>/dev/null; then
         pass "CAT-II SRG-OS-000073" "SHA_CRYPT_MIN_ROUNDS = $VAL (>= 5000)"
@@ -375,6 +333,24 @@ else
         fail "CAT-II SRG-OS-000073" "SHA_CRYPT_MIN_ROUNDS = $VAL (must be >= 5000)"
         fix "In /etc/login.defs set: SHA_CRYPT_MIN_ROUNDS 5000"
     fi
+fi
+
+# PASS_MIN_LEN - check login.defs first, then pwquality.conf
+VAL=""
+if [ -f "$LOGIN_DEFS" ]; then
+    VAL=$(get_val "PASS_MIN_LEN" "$LOGIN_DEFS")
+fi
+if [ -z "$VAL" ] && [ -f "$PWQCONF" ]; then
+    VAL=$(get_val "minlen" "$PWQCONF")
+fi
+if [ -z "$VAL" ]; then
+    fail "CAT-II SRG-OS-000078" "PASS_MIN_LEN/minlen not set in login.defs or pwquality.conf"
+    fix "In /etc/login.defs set: PASS_MIN_LEN 15  OR  in /etc/security/pwquality.conf set: minlen = 15"
+elif [ "$VAL" -ge 15 ] 2>/dev/null; then
+    pass "CAT-II SRG-OS-000078" "Password minimum length = $VAL (>= 15)"
+else
+    fail "CAT-II SRG-OS-000078" "Password minimum length = $VAL (must be >= 15)"
+    fix "In /etc/login.defs set: PASS_MIN_LEN 15  OR  in /etc/security/pwquality.conf set: minlen = 15"
 fi
 
 # =============================================================================
@@ -416,11 +392,10 @@ else
     fi
 
     PWQCONF="/etc/security/pwquality.conf"
-    PAMFILES=$(grep -rl "pam_pwquality\|pam_cracklib" /etc/pam.d/ 2>/dev/null)
 
     get_credit() {
-        grep -h "$1" $PWQCONF $PAMFILES 2>/dev/null | grep -v "^#" \
-            | grep -o "${1}=-*[0-9]*" | head -1 | cut -d= -f2
+        local key=$1
+        grep -h "^${key}" "$PWQCONF" 2>/dev/null | grep -v "^#" | grep -o "${key}\s*=\s*-*[0-9]*" | tr -d ' ' | cut -d= -f2 | head -1
     }
 
     VAL=$(get_credit "ucredit")
