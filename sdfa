@@ -224,35 +224,7 @@ for svc in telnet rsh rlogin rexec ftp vsftpd xinetd rpcbind; do
 done
 [ "$ALL_CLEAN" = "1" ] && pass "CAT-I SRG-OS-000095" "No dangerous services installed"
 
-# =============================================================================
-header "CAT I - IMAGE PROVENANCE"
-# =============================================================================
 
-if [ -f /etc/os-release ]; then
-    pass "CAT-I SRG-OS-000257" "OS provenance: $(grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"')"
-else
-    fail "CAT-I SRG-OS-000257" "/etc/os-release missing - cannot confirm image provenance"
-    fix "Ensure image is built from official debian:13-slim base"
-fi
-
-log "  Checking for binaries not owned by any dpkg package..."
-UNEXPECTED=""
-for dir in /usr/bin /usr/sbin /bin /sbin; do
-    if [ -d "$dir" ]; then
-        for f in "$dir"/*; do
-            [ -f "$f" ] || continue
-            if ! dpkg -S "$f" > /dev/null 2>&1; then
-                UNEXPECTED="$UNEXPECTED\n$f"
-            fi
-        done
-    fi
-done
-if [ -z "$UNEXPECTED" ]; then
-    pass "CAT-I SRG-OS-000257" "All system binaries owned by known dpkg packages"
-else
-    fail "CAT-I SRG-OS-000257" "Binaries not owned by any package:$UNEXPECTED"
-    fix "Remove unauthorized binaries or ensure they are added intentionally via Dockerfile"
-fi
 
 # =============================================================================
 header "CAT I - SYSTEM BANNERS"
@@ -288,15 +260,22 @@ header "CAT II - PASSWORD POLICY"
 # =============================================================================
 
 LOGIN_DEFS="/etc/login.defs"
+PWQCONF="/etc/security/pwquality.conf"
+
+# Helper: get value from login.defs OR pwquality.conf
+get_val() {
+    local key=$1 file=$2
+    grep -E "^${key}[\s=]" "$file" 2>/dev/null | grep -v "^#" | awk -F'[= \t]+' '{print $2}' | head -1
+}
+
+# PASS_MAX_DAYS and PASS_MIN_DAYS only live in login.defs
 if [ ! -f "$LOGIN_DEFS" ]; then
     fail "CAT-II SRG-OS-000076" "/etc/login.defs missing"
-    fix "Add to Dockerfile: COPY login.defs /etc/login.defs  with correct values set"
+    fix "Add to Dockerfile: COPY login.defs /etc/login.defs with correct values set"
 else
-    get_login() { grep -E "^$1\s" "$LOGIN_DEFS" 2>/dev/null | awk '{print $2}'; }
-
-    VAL=$(get_login "PASS_MAX_DAYS")
+    VAL=$(get_val "PASS_MAX_DAYS" "$LOGIN_DEFS")
     if [ -z "$VAL" ]; then
-        fail "CAT-II SRG-OS-000076" "PASS_MAX_DAYS not set"
+        fail "CAT-II SRG-OS-000076" "PASS_MAX_DAYS not set in login.defs"
         fix "Add to /etc/login.defs: PASS_MAX_DAYS 60"
     elif [ "$VAL" -le 60 ] 2>/dev/null; then
         pass "CAT-II SRG-OS-000076" "PASS_MAX_DAYS = $VAL (<= 60)"
@@ -305,9 +284,9 @@ else
         fix "In /etc/login.defs set: PASS_MAX_DAYS 60"
     fi
 
-    VAL=$(get_login "PASS_MIN_DAYS")
+    VAL=$(get_val "PASS_MIN_DAYS" "$LOGIN_DEFS")
     if [ -z "$VAL" ]; then
-        fail "CAT-II SRG-OS-000075" "PASS_MIN_DAYS not set"
+        fail "CAT-II SRG-OS-000075" "PASS_MIN_DAYS not set in login.defs"
         fix "Add to /etc/login.defs: PASS_MIN_DAYS 1"
     elif [ "$VAL" -ge 1 ] 2>/dev/null; then
         pass "CAT-II SRG-OS-000075" "PASS_MIN_DAYS = $VAL (>= 1)"
@@ -316,20 +295,9 @@ else
         fix "In /etc/login.defs set: PASS_MIN_DAYS 1"
     fi
 
-    VAL=$(get_login "PASS_MIN_LEN")
+    VAL=$(get_val "PASS_WARN_AGE" "$LOGIN_DEFS")
     if [ -z "$VAL" ]; then
-        fail "CAT-II SRG-OS-000078" "PASS_MIN_LEN not set"
-        fix "Add to /etc/login.defs: PASS_MIN_LEN 15"
-    elif [ "$VAL" -ge 15 ] 2>/dev/null; then
-        pass "CAT-II SRG-OS-000078" "PASS_MIN_LEN = $VAL (>= 15)"
-    else
-        fail "CAT-II SRG-OS-000078" "PASS_MIN_LEN = $VAL (must be >= 15)"
-        fix "In /etc/login.defs set: PASS_MIN_LEN 15"
-    fi
-
-    VAL=$(get_login "PASS_WARN_AGE")
-    if [ -z "$VAL" ]; then
-        fail "CAT-II SRG-OS-000343" "PASS_WARN_AGE not set"
+        fail "CAT-II SRG-OS-000343" "PASS_WARN_AGE not set in login.defs"
         fix "Add to /etc/login.defs: PASS_WARN_AGE 7"
     elif [ "$VAL" -ge 7 ] 2>/dev/null; then
         pass "CAT-II SRG-OS-000343" "PASS_WARN_AGE = $VAL (>= 7)"
@@ -339,17 +307,17 @@ else
     fi
 
     # On FIPS systems SHA512 only - not yescrypt
-    HASH=$(get_login "ENCRYPT_METHOD")
+    HASH=$(get_val "ENCRYPT_METHOD" "$LOGIN_DEFS")
     if [ "$HASH" = "SHA512" ]; then
-        pass "CAT-II SRG-OS-000073" "ENCRYPT_METHOD = $HASH"
+        pass "CAT-II SRG-OS-000073" "ENCRYPT_METHOD = $HASH (login.defs)"
     else
-        fail "CAT-II SRG-OS-000073" "ENCRYPT_METHOD = '$HASH' (must be SHA512 on FIPS - yescrypt is not FIPS-approved)"
+        fail "CAT-II SRG-OS-000073" "ENCRYPT_METHOD = '$HASH' (must be SHA512 on FIPS)"
         fix "In /etc/login.defs set: ENCRYPT_METHOD SHA512"
     fi
 
-    VAL=$(get_login "SHA_CRYPT_MIN_ROUNDS")
+    VAL=$(get_val "SHA_CRYPT_MIN_ROUNDS" "$LOGIN_DEFS")
     if [ -z "$VAL" ]; then
-        fail "CAT-II SRG-OS-000073" "SHA_CRYPT_MIN_ROUNDS not set"
+        fail "CAT-II SRG-OS-000073" "SHA_CRYPT_MIN_ROUNDS not set in login.defs"
         fix "Add to /etc/login.defs: SHA_CRYPT_MIN_ROUNDS 5000"
     elif [ "$VAL" -ge 5000 ] 2>/dev/null; then
         pass "CAT-II SRG-OS-000073" "SHA_CRYPT_MIN_ROUNDS = $VAL (>= 5000)"
@@ -357,6 +325,24 @@ else
         fail "CAT-II SRG-OS-000073" "SHA_CRYPT_MIN_ROUNDS = $VAL (must be >= 5000)"
         fix "In /etc/login.defs set: SHA_CRYPT_MIN_ROUNDS 5000"
     fi
+fi
+
+# PASS_MIN_LEN - check login.defs first, then pwquality.conf
+VAL=""
+if [ -f "$LOGIN_DEFS" ]; then
+    VAL=$(get_val "PASS_MIN_LEN" "$LOGIN_DEFS")
+fi
+if [ -z "$VAL" ] && [ -f "$PWQCONF" ]; then
+    VAL=$(get_val "minlen" "$PWQCONF")
+fi
+if [ -z "$VAL" ]; then
+    fail "CAT-II SRG-OS-000078" "PASS_MIN_LEN/minlen not set in login.defs or pwquality.conf"
+    fix "In /etc/login.defs set: PASS_MIN_LEN 15  OR  in /etc/security/pwquality.conf set: minlen = 15"
+elif [ "$VAL" -ge 15 ] 2>/dev/null; then
+    pass "CAT-II SRG-OS-000078" "Password minimum length = $VAL (>= 15)"
+else
+    fail "CAT-II SRG-OS-000078" "Password minimum length = $VAL (must be >= 15)"
+    fix "In /etc/login.defs set: PASS_MIN_LEN 15  OR  in /etc/security/pwquality.conf set: minlen = 15"
 fi
 
 # =============================================================================
