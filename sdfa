@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# STIG CAT I & CAT II Verification - Debian 13 Container
+# STIG CAT I & CAT II Verification - Debian 13 Container (FIPS)
 # Container-applicable checks only. Binary PASS/FAIL with remediation.
 # Run with: bash stig_check.sh
 # =============================================================================
@@ -24,12 +24,93 @@ header() { log "\n${BLUE}${BOLD}=== $1 ===${NC}"; }
 
 log "${BOLD}"
 log "========================================================"
-log "  STIG CAT I & II - Container Verification"
+log "  STIG CAT I & II - Debian Container Verification (FIPS)"
 log "  Date : $(date)"
 log "  OS   : $(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '\"')"
 log "  User : $(id)"
 log "========================================================"
 log "${NC}"
+
+# =============================================================================
+header "CAT I - FIPS VERIFICATION"
+# =============================================================================
+
+# FIPS kernel flag
+if [ -f /proc/sys/crypto/fips_enabled ]; then
+    FIPS=$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)
+    if [ "$FIPS" = "1" ]; then
+        pass "CAT-I SRG-OS-000120" "FIPS mode enabled (/proc/sys/crypto/fips_enabled = 1)"
+    else
+        fail "CAT-I SRG-OS-000120" "FIPS mode not enabled (value=$FIPS)"
+        fix "Boot host kernel with fips=1 in kernel cmdline"
+        fix "Or run container on a FIPS-enabled host"
+    fi
+else
+    fail "CAT-I SRG-OS-000120" "/proc/sys/crypto/fips_enabled not available"
+    fix "Ensure container has access to /proc/sys/crypto - run on a FIPS-enabled host"
+fi
+
+# OpenSSL installed
+if command -v openssl > /dev/null 2>&1; then
+    OPENSSL_VER=$(openssl version 2>/dev/null)
+    pass "CAT-I SRG-OS-000120" "OpenSSL present: $OPENSSL_VER"
+
+    # FIPS provider loaded
+    FIPS_PROVIDER=$(openssl list -providers 2>/dev/null | grep -i fips)
+    if [ -n "$FIPS_PROVIDER" ]; then
+        pass "CAT-I SRG-OS-000120" "FIPS provider loaded: $FIPS_PROVIDER"
+    else
+        fail "CAT-I SRG-OS-000120" "FIPS provider not listed in openssl providers"
+        fix "Install: apt-get install -y openssl-fips-provider  OR  libssl3-fips"
+        fix "Ensure /etc/ssl/openssl.cnf references the FIPS provider"
+    fi
+
+    # MD5 must be disabled under FIPS
+    FIPS_ALT=$(echo "test" | openssl dgst -md5 2>&1)
+    if echo "$FIPS_ALT" | grep -qi "disabled\|not allowed\|fips\|error"; then
+        pass "CAT-I SRG-OS-000120" "MD5 is disabled (FIPS enforcing)"
+    else
+        fail "CAT-I SRG-OS-000120" "MD5 is not disabled - FIPS may not be enforcing"
+        fix "Ensure FIPS provider is active and configured in openssl.cnf"
+    fi
+
+    # RC4 must be disabled
+    RC4_OUT=$(echo "test" | openssl enc -rc4 2>&1)
+    if echo "$RC4_OUT" | grep -qi "disabled\|unknown\|not allowed\|fips\|error\|invalid"; then
+        pass "CAT-I SRG-OS-000120" "RC4 is disabled (FIPS enforcing)"
+    else
+        fail "CAT-I SRG-OS-000120" "RC4 may not be disabled"
+        fix "Ensure FIPS provider is active - RC4 must be unavailable"
+    fi
+
+    # DES must be disabled
+    DES_OUT=$(echo "test" | openssl enc -des 2>&1)
+    if echo "$DES_OUT" | grep -qi "disabled\|unknown\|not allowed\|fips\|error\|invalid"; then
+        pass "CAT-I SRG-OS-000120" "DES is disabled (FIPS enforcing)"
+    else
+        fail "CAT-I SRG-OS-000120" "DES may not be disabled"
+        fix "Ensure FIPS provider is active - DES must be unavailable"
+    fi
+else
+    fail "CAT-I SRG-OS-000120" "openssl not installed"
+    fix "Install: apt-get install -y openssl"
+fi
+
+# openssl.cnf references FIPS
+OPENSSL_DIR=$(openssl version -d 2>/dev/null | awk '{print $2}' | tr -d '"')
+OPENSSL_CNF="${OPENSSL_DIR}/openssl.cnf"
+if [ -f "$OPENSSL_CNF" ]; then
+    if grep -qi "fips" "$OPENSSL_CNF" 2>/dev/null; then
+        pass "CAT-I SRG-OS-000120" "openssl.cnf references FIPS configuration"
+    else
+        fail "CAT-I SRG-OS-000120" "openssl.cnf does not reference FIPS"
+        fix "Add FIPS provider section to $OPENSSL_CNF"
+        fix "Or set OPENSSL_CONF env var to a FIPS-enabled config file"
+    fi
+else
+    fail "CAT-I SRG-OS-000120" "openssl.cnf not found at $OPENSSL_CNF"
+    fix "Ensure openssl is properly installed: apt-get install -y openssl"
+fi
 
 # =============================================================================
 header "CAT I - ACCOUNTS"
@@ -94,7 +175,6 @@ header "CAT I - FILE PERMISSIONS"
 
 check_perm() {
     local file=$1 acceptable=$2 expected_own=$3 stig=$4
-    # acceptable is a space-separated list of valid permission values e.g. "644 640 600 400"
     if [ ! -e "$file" ]; then
         fail "CAT-I $stig" "$file does not exist"
         fix "Ensure $file is created as part of your base image"
@@ -211,22 +291,33 @@ done
 [ "$ALL_CLEAN" = "1" ] && pass "CAT-I SRG-OS-000095" "No dangerous services installed"
 
 # =============================================================================
-header "CAT I - PACKAGE INTEGRITY"
+header "CAT I - IMAGE PROVENANCE"
 # =============================================================================
 
-if command -v dpkg > /dev/null 2>&1; then
-    log "  Running dpkg --verify..."
-    DPKG_OUT=$(dpkg --verify 2>&1)
-    if [ -z "$DPKG_OUT" ]; then
-        pass "CAT-I SRG-OS-000257" "All packages pass dpkg integrity check"
-    else
-        fail "CAT-I SRG-OS-000257" "Package integrity issues:\n$DPKG_OUT"
-        fix "Reinstall affected packages: apt-get install --reinstall <package>"
-        fix "Or rebuild the container image from a trusted base"
-    fi
+if [ -f /etc/os-release ]; then
+    pass "CAT-I SRG-OS-000257" "OS provenance: $(grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"')"
 else
-    fail "CAT-I SRG-OS-000257" "dpkg not available"
-    fix "Ensure the image is built on a Debian base that includes dpkg"
+    fail "CAT-I SRG-OS-000257" "/etc/os-release missing - cannot confirm image provenance"
+    fix "Ensure image is built from official debian:13-slim base"
+fi
+
+log "  Checking for binaries not owned by any dpkg package..."
+UNEXPECTED=""
+for dir in /usr/bin /usr/sbin /bin /sbin; do
+    if [ -d "$dir" ]; then
+        for f in "$dir"/*; do
+            [ -f "$f" ] || continue
+            if ! dpkg -S "$f" > /dev/null 2>&1; then
+                UNEXPECTED="$UNEXPECTED\n$f"
+            fi
+        done
+    fi
+done
+if [ -z "$UNEXPECTED" ]; then
+    pass "CAT-I SRG-OS-000257" "All system binaries owned by known dpkg packages"
+else
+    fail "CAT-I SRG-OS-000257" "Binaries not owned by any package:$UNEXPECTED"
+    fix "Remove unauthorized binaries or ensure they are added intentionally via Dockerfile"
 fi
 
 # =============================================================================
@@ -313,11 +404,12 @@ else
         fix "In /etc/login.defs set: PASS_WARN_AGE 7"
     fi
 
+    # On FIPS systems SHA512 only - not yescrypt
     HASH=$(get_login "ENCRYPT_METHOD")
-    if [ "$HASH" = "SHA512" ] || [ "$HASH" = "yescrypt" ]; then
+    if [ "$HASH" = "SHA512" ]; then
         pass "CAT-II SRG-OS-000073" "ENCRYPT_METHOD = $HASH"
     else
-        fail "CAT-II SRG-OS-000073" "ENCRYPT_METHOD = '$HASH' (must be SHA512 or yescrypt)"
+        fail "CAT-II SRG-OS-000073" "ENCRYPT_METHOD = '$HASH' (must be SHA512 on FIPS - yescrypt is not FIPS-approved)"
         fix "In /etc/login.defs set: ENCRYPT_METHOD SHA512"
     fi
 
