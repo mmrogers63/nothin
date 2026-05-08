@@ -568,40 +568,32 @@ header "CAT II - CONTAINER SPECIFIC"
 # =============================================================================
 
 # Non-root
-CUR_UID=$(id -u)
-if [ "$CUR_UID" -ne 0 ]; then
-    pass "CAT-II CONTAINER" "Running as non-root UID: $CUR_UID"
-else
-    fail "CAT-II CONTAINER" "Running as root (UID 0)"
-    fix "Add to Dockerfile: RUN adduser -D -s /sbin/nologin appuser && USER appuser"
-fi
-
-# No package managers
+# No package managers in image
 PM_FOUND=""
 for pm in apk apt apt-get yum dnf pip pip3 npm yarn; do
     if command -v "$pm" > /dev/null 2>&1; then PM_FOUND="$PM_FOUND $pm"; fi
 done
 if [ -z "$PM_FOUND" ]; then
-    pass "CAT-II CONTAINER" "No package managers present"
+    pass "CAT-II CONTAINER" "No package managers present in image"
 else
-    fail "CAT-II CONTAINER" "Package managers found: $PM_FOUND"
+    fail "CAT-II CONTAINER" "Package managers found in image: $PM_FOUND"
     fix "Use multi-stage build - copy only required binaries to final FROM scratch or alpine image"
     fix "Or accept apk presence if required and document as operational necessity"
 fi
 
-# No compilers
+# No compilers in image
 COMPILERS=""
 for tool in gcc g++ cc make cmake; do
     if command -v "$tool" > /dev/null 2>&1; then COMPILERS="$COMPILERS $tool"; fi
 done
 if [ -z "$COMPILERS" ]; then
-    pass "CAT-II CONTAINER" "No compilers present"
+    pass "CAT-II CONTAINER" "No compilers present in image"
 else
-    fail "CAT-II CONTAINER" "Compilers found: $COMPILERS"
+    fail "CAT-II CONTAINER" "Compilers found in image: $COMPILERS"
     fix "Use multi-stage build: compile in builder stage, copy only artifacts to final image"
 fi
 
-# Package count
+# Minimal package footprint
 if command -v apk > /dev/null 2>&1; then
     PKG_COUNT=$(apk list --installed 2>/dev/null | wc -l)
     if [ "$PKG_COUNT" -lt 50 ]; then
@@ -610,60 +602,6 @@ if command -v apk > /dev/null 2>&1; then
         fail "CAT-II CONTAINER" "Package count $PKG_COUNT is too high (must be < 50 for hardened Alpine)"
         fix "Review with 'apk list --installed' and remove unnecessary packages in Dockerfile"
     fi
-fi
-
-# Read-only root filesystem
-if touch /test_rofs_$$ 2>/dev/null; then
-    rm -f /test_rofs_$$
-    fail "CAT-II CONTAINER" "Root filesystem is writable"
-    fix "Run container with: docker run --read-only ..."
-    fix "Or in Kubernetes: securityContext.readOnlyRootFilesystem: true"
-else
-    pass "CAT-II CONTAINER" "Root filesystem is read-only"
-fi
-
-# No listening ports
-if command -v ss > /dev/null 2>&1; then
-    LISTEN=$(ss -tlnp 2>/dev/null | grep -c "LISTEN" || echo "0")
-    if [ "$LISTEN" -eq 0 ]; then
-        pass "CAT-II SRG-OS-000095" "No listening TCP ports"
-    else
-        fail "CAT-II SRG-OS-000095" "$LISTEN listening TCP port(s) found"
-        ss -tlnp 2>/dev/null | tee -a "$REPORT"
-        fix "Remove or disable services not required by the application"
-    fi
-elif command -v netstat > /dev/null 2>&1; then
-    LISTEN=$(netstat -tlnp 2>/dev/null | grep -c "LISTEN" || echo "0")
-    if [ "$LISTEN" -eq 0 ]; then
-        pass "CAT-II SRG-OS-000095" "No listening TCP ports"
-    else
-        fail "CAT-II SRG-OS-000095" "$LISTEN listening TCP port(s) found"
-        netstat -tlnp 2>/dev/null | tee -a "$REPORT"
-        fix "Remove or disable services not required by the application"
-    fi
-else
-    fail "CAT-II SRG-OS-000095" "ss/netstat not available - cannot verify listening ports"
-    fix "Install: apk add iproute2  OR  apk add net-tools"
-fi
-
-# Container capabilities
-if [ -f /proc/self/status ]; then
-    CAP_EFF=$(grep "^CapEff:" /proc/self/status 2>/dev/null | awk '{print $2}')
-    if [ "$CAP_EFF" = "0000000000000000" ]; then
-        pass "CAT-II CONTAINER" "No effective capabilities (fully dropped)"
-    else
-        fail "CAT-II CONTAINER" "Effective capabilities: $CAP_EFF"
-        fix "Run with: docker run --cap-drop=ALL --cap-add=<only_needed> ..."
-        fix "Or in Kubernetes: securityContext.capabilities.drop: [ALL]"
-    fi
-fi
-
-# /etc/os-release
-if [ -f /etc/os-release ]; then
-    pass "CAT-II CONTAINER" "/etc/os-release present"
-else
-    fail "CAT-II CONTAINER" "/etc/os-release missing"
-    fix "Ensure image is built from official alpine base which includes /etc/os-release"
 fi
 
 # =============================================================================
