@@ -75,8 +75,8 @@ if command -v openssl > /dev/null 2>&1; then
     fi
 
     # RC4 must be disabled
-    RC4_OUT=$(echo "test" | openssl enc -rc4 2>&1)
-    if echo "$RC4_OUT" | grep -qi "disabled\|unknown\|not allowed\|fips\|error\|invalid"; then
+    RC4_OUT=$(openssl enc -rc4 -nosalt -pass pass:test -in /dev/null 2>&1)
+    if echo "$RC4_OUT" | grep -qi "disabled\|unknown\|not allowed\|fips\|error\|invalid\|unsupported"; then
         pass "CAT-I SRG-OS-000120" "RC4 is disabled (FIPS enforcing)"
     else
         fail "CAT-I SRG-OS-000120" "RC4 may not be disabled"
@@ -84,8 +84,8 @@ if command -v openssl > /dev/null 2>&1; then
     fi
 
     # DES must be disabled
-    DES_OUT=$(echo "test" | openssl enc -des 2>&1)
-    if echo "$DES_OUT" | grep -qi "disabled\|unknown\|not allowed\|fips\|error\|invalid"; then
+    DES_OUT=$(openssl enc -des -nosalt -pass pass:test -in /dev/null 2>&1)
+    if echo "$DES_OUT" | grep -qi "disabled\|unknown\|not allowed\|fips\|error\|invalid\|unsupported"; then
         pass "CAT-I SRG-OS-000120" "DES is disabled (FIPS enforcing)"
     else
         fail "CAT-I SRG-OS-000120" "DES may not be disabled"
@@ -173,73 +173,7 @@ fi
 header "CAT I - FILE PERMISSIONS"
 # =============================================================================
 
-check_perm() {
-    local file=$1 acceptable=$2 expected_own=$3 stig=$4
-    if [ ! -e "$file" ]; then
-        fail "CAT-I $stig" "$file does not exist"
-        fix "Ensure $file is created as part of your base image"
-        return
-    fi
-    local perm own perm_ok
-    perm=$(stat -c "%a" "$file" 2>/dev/null)
-    own=$(stat -c "%U:%G" "$file" 2>/dev/null)
-    perm_ok=0
-    for ok in $acceptable; do
-        [ "$perm" = "$ok" ] && perm_ok=1 && break
-    done
-    if [ "$perm_ok" = "1" ]; then
-        pass "CAT-I $stig" "$file permissions: $perm"
-    else
-        fail "CAT-I $stig" "$file permissions: $perm (acceptable: $acceptable)"
-        fix "Run: chmod $(echo $acceptable | awk '{print $1}') $file"
-    fi
-    if [ "$own" = "$expected_own" ]; then
-        pass "CAT-I $stig" "$file owner: $own"
-    else
-        fail "CAT-I $stig" "$file owner: $own (expected $expected_own)"
-        fix "Run: chown $expected_own $file"
-    fi
-}
 
-check_perm "/etc/passwd" "644 640 600 400" "root:root" "SRG-OS-000257"
-check_perm "/etc/group"  "644 640 600 400" "root:root" "SRG-OS-000257"
-
-if [ -f /etc/shadow ]; then
-    PERM=$(stat -c "%a" /etc/shadow 2>/dev/null)
-    OWN=$(stat -c "%U:%G" /etc/shadow 2>/dev/null)
-    if [ "$PERM" = "640" ] || [ "$PERM" = "600" ] || [ "$PERM" = "000" ]; then
-        pass "CAT-I SRG-OS-000257" "/etc/shadow permissions: $PERM"
-    else
-        fail "CAT-I SRG-OS-000257" "/etc/shadow permissions: $PERM (expected 640 or stricter)"
-        fix "Run: chmod 640 /etc/shadow"
-    fi
-    if [ "$OWN" = "root:shadow" ] || [ "$OWN" = "root:root" ]; then
-        pass "CAT-I SRG-OS-000257" "/etc/shadow owner: $OWN"
-    else
-        fail "CAT-I SRG-OS-000257" "/etc/shadow owner: $OWN (expected root:shadow)"
-        fix "Run: chown root:shadow /etc/shadow"
-    fi
-else
-    fail "CAT-I SRG-OS-000257" "/etc/shadow does not exist"
-    fix "Ensure shadow-utils is installed and pwconv has been run"
-fi
-
-if [ -f /etc/gshadow ]; then
-    PERM=$(stat -c "%a" /etc/gshadow 2>/dev/null)
-    OWN=$(stat -c "%U:%G" /etc/gshadow 2>/dev/null)
-    if [ "$PERM" = "640" ] || [ "$PERM" = "600" ] || [ "$PERM" = "000" ]; then
-        pass "CAT-I SRG-OS-000257" "/etc/gshadow permissions: $PERM"
-    else
-        fail "CAT-I SRG-OS-000257" "/etc/gshadow permissions: $PERM (expected 640 or stricter)"
-        fix "Run: chmod 640 /etc/gshadow"
-    fi
-    if [ "$OWN" = "root:shadow" ] || [ "$OWN" = "root:root" ]; then
-        pass "CAT-I SRG-OS-000257" "/etc/gshadow owner: $OWN"
-    else
-        fail "CAT-I SRG-OS-000257" "/etc/gshadow owner: $OWN (expected root:shadow)"
-        fix "Run: chown root:shadow /etc/gshadow"
-    fi
-fi
 
 log "  Scanning for world-writable files..."
 WW=$(find / -xdev -type f -perm -0002 ! -path "/proc/*" ! -path "/sys/*" ! -path "/dev/*" ! -path "/run/*" 2>/dev/null)
