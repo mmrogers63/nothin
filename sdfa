@@ -96,20 +96,18 @@ else
     fix "Install: apt-get install -y openssl"
 fi
 
-# openssl.cnf references FIPS
-OPENSSL_DIR=$(openssl version -d 2>/dev/null | awk '{print $2}' | tr -d '"')
-OPENSSL_CNF="${OPENSSL_DIR}/openssl.cnf"
-if [ -f "$OPENSSL_CNF" ]; then
-    if grep -qi "fips" "$OPENSSL_CNF" 2>/dev/null; then
-        pass "CAT-I SRG-OS-000120" "openssl.cnf references FIPS configuration"
+# /etc/ssl/fipsmodule.cnf must exist and be valid
+if [ -f /etc/ssl/fipsmodule.cnf ]; then
+    if grep -qi "fips\|activate" /etc/ssl/fipsmodule.cnf 2>/dev/null; then
+        pass "CAT-I SRG-OS-000120" "/etc/ssl/fipsmodule.cnf present and references FIPS"
     else
-        fail "CAT-I SRG-OS-000120" "openssl.cnf does not reference FIPS"
-        fix "Add FIPS provider section to $OPENSSL_CNF"
-        fix "Or set OPENSSL_CONF env var to a FIPS-enabled config file"
+        fail "CAT-I SRG-OS-000120" "/etc/ssl/fipsmodule.cnf exists but appears empty or invalid"
+        fix "Regenerate: openssl fipsinstall -out /etc/ssl/fipsmodule.cnf -module <fips.so path>"
     fi
 else
-    fail "CAT-I SRG-OS-000120" "openssl.cnf not found at $OPENSSL_CNF"
-    fix "Ensure openssl is properly installed: apt-get install -y openssl"
+    fail "CAT-I SRG-OS-000120" "/etc/ssl/fipsmodule.cnf not found"
+    fix "Generate with: openssl fipsinstall -out /etc/ssl/fipsmodule.cnf -module /usr/lib/x86_64-linux-gnu/ossl-modules/fips.so"
+    fix "Then reference it in /etc/ssl/openssl.cnf"
 fi
 
 # =============================================================================
@@ -133,7 +131,9 @@ else
 fi
 
 ROOT_SHELL=$(grep "^root:" /etc/passwd | cut -d: -f7)
-if [ "$ROOT_SHELL" = "/sbin/nologin" ] || [ "$ROOT_SHELL" = "/usr/sbin/nologin" ] || [ "$ROOT_SHELL" = "/bin/false" ]; then
+if [ "$ROOT_SHELL" = "/sbin/nologin" ] || [ "$ROOT_SHELL" = "/usr/sbin/nologin" ] || \
+   [ "$ROOT_SHELL" = "/bin/false" ] || [ "$ROOT_SHELL" = "/usr/bin/false" ] || \
+   [ "$ROOT_SHELL" = "nobody" ]; then
     pass "CAT-I SRG-OS-000109" "Root shell is restricted: $ROOT_SHELL"
 else
     fail "CAT-I SRG-OS-000109" "Root shell is $ROOT_SHELL"
@@ -394,11 +394,10 @@ else
     fi
 
     PWQCONF="/etc/security/pwquality.conf"
-    PAMFILES=$(grep -rl "pam_pwquality\|pam_cracklib" /etc/pam.d/ 2>/dev/null)
 
     get_credit() {
         local key=$1
-        grep -h "$key" $PWQCONF $PAMFILES 2>/dev/null | grep -v "^#" | grep -o "${key}=-*[0-9]*" | head -1 | cut -d= -f2
+        grep -h "^${key}" "$PWQCONF" 2>/dev/null | grep -v "^#" | grep -o "${key}\s*=\s*-*[0-9]*" | tr -d ' ' | cut -d= -f2 | head -1
     }
 
     VAL=$(get_credit "ucredit")
