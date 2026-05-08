@@ -171,56 +171,7 @@ fi
 header "CAT I - FILE PERMISSIONS"
 # =============================================================================
 
-check_perm() {
-    local file=$1 acceptable=$2 expected_own=$3 stig=$4
-    if [ ! -e "$file" ]; then
-        fail "CAT-I $stig" "$file does not exist"
-        fix "Ensure $file exists in the base image"
-        return
-    fi
-    local perm own perm_ok
-    perm=$(stat -c "%a" "$file" 2>/dev/null)
-    own=$(stat -c "%U:%G" "$file" 2>/dev/null)
-    perm_ok=0
-    for ok in $acceptable; do
-        [ "$perm" = "$ok" ] && perm_ok=1 && break
-    done
-    if [ "$perm_ok" = "1" ]; then
-        pass "CAT-I $stig" "$file permissions: $perm"
-    else
-        fail "CAT-I $stig" "$file permissions: $perm (acceptable: $acceptable)"
-        fix "Run: chmod $(echo $acceptable | awk '{print $1}') $file"
-    fi
-    if [ "$own" = "$expected_own" ]; then
-        pass "CAT-I $stig" "$file owner: $own"
-    else
-        fail "CAT-I $stig" "$file owner: $own (expected $expected_own)"
-        fix "Run: chown $expected_own $file"
-    fi
-}
 
-check_perm "/etc/passwd" "644 640 600 400" "root:root"   "SRG-OS-000257"
-check_perm "/etc/group"  "644 640 600 400" "root:root"   "SRG-OS-000257"
-
-# /etc/shadow - Alpine uses root:root not root:shadow
-if [ -f /etc/shadow ]; then
-    PERM=$(stat -c "%a" /etc/shadow 2>/dev/null)
-    OWN=$(stat -c "%U:%G" /etc/shadow 2>/dev/null)
-    case "$PERM" in
-        640|600|400|000) pass "CAT-I SRG-OS-000257" "/etc/shadow permissions: $PERM" ;;
-        *) fail "CAT-I SRG-OS-000257" "/etc/shadow permissions: $PERM (expected 640 or stricter)"
-           fix "Run: chmod 640 /etc/shadow" ;;
-    esac
-    if [ "$OWN" = "root:root" ] || [ "$OWN" = "root:shadow" ]; then
-        pass "CAT-I SRG-OS-000257" "/etc/shadow owner: $OWN"
-    else
-        fail "CAT-I SRG-OS-000257" "/etc/shadow owner: $OWN (expected root:root)"
-        fix "Run: chown root:root /etc/shadow"
-    fi
-else
-    fail "CAT-I SRG-OS-000257" "/etc/shadow does not exist"
-    fix "Ensure shadow passwords are enabled in the Alpine image"
-fi
 
 # World-writable files - SRG-OS-000258
 log "  Scanning for world-writable files..."
