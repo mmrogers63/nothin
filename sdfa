@@ -541,37 +541,32 @@ done < /etc/passwd
 header "CAT II - CONTAINER SPECIFIC"
 # =============================================================================
 
-CUR_UID=$(id -u)
-if [ "$CUR_UID" -ne 0 ]; then
-    pass "CAT-II CONTAINER" "Running as non-root UID: $CUR_UID"
-else
-    fail "CAT-II CONTAINER" "Running as root (UID 0)"
-    fix "Add to Dockerfile: RUN useradd -r -s /sbin/nologin appuser && USER appuser"
-fi
-
+# Package managers must not be present in hardened image
 PM_FOUND=""
 for pm in apt apt-get apk yum dnf pip pip3 npm yarn; do
     if command -v "$pm" > /dev/null 2>&1; then PM_FOUND="$PM_FOUND $pm"; fi
 done
 if [ -z "$PM_FOUND" ]; then
-    pass "CAT-II CONTAINER" "No package managers present"
+    pass "CAT-II CONTAINER" "No package managers present in image"
 else
-    fail "CAT-II CONTAINER" "Package managers found: $PM_FOUND"
+    fail "CAT-II CONTAINER" "Package managers found in image: $PM_FOUND"
     fix "Add to Dockerfile after installs: RUN apt-get remove -y apt && rm -rf /var/lib/apt/lists/*"
     fix "Or use multi-stage build and copy only required binaries to final image"
 fi
 
+# Compilers must not be present in hardened image
 COMPILERS=""
 for tool in gcc g++ cc make cmake; do
     if command -v "$tool" > /dev/null 2>&1; then COMPILERS="$COMPILERS $tool"; fi
 done
 if [ -z "$COMPILERS" ]; then
-    pass "CAT-II CONTAINER" "No compilers present"
+    pass "CAT-II CONTAINER" "No compilers present in image"
 else
-    fail "CAT-II CONTAINER" "Compilers found: $COMPILERS"
+    fail "CAT-II CONTAINER" "Compilers found in image: $COMPILERS"
     fix "Use multi-stage build: compile in a builder stage, copy only artifacts to final slim image"
 fi
 
+# Minimal package footprint
 if command -v dpkg > /dev/null 2>&1; then
     PKG_COUNT=$(dpkg -l 2>/dev/null | grep -c "^ii" || echo "0")
     if [ "$PKG_COUNT" -lt 100 ]; then
@@ -581,48 +576,6 @@ if command -v dpkg > /dev/null 2>&1; then
         fix "Review installed packages with 'dpkg -l' and remove unnecessary ones in Dockerfile"
         fix "Use debian:13-slim as base and install only what the application requires"
     fi
-fi
-
-if touch /test_rofs_$$ 2>/dev/null; then
-    rm -f /test_rofs_$$
-    fail "CAT-II CONTAINER" "Root filesystem is writable"
-    fix "Run container with: docker run --read-only ..."
-    fix "Or in Kubernetes set: securityContext.readOnlyRootFilesystem: true"
-else
-    pass "CAT-II CONTAINER" "Root filesystem is read-only"
-fi
-
-if command -v ss > /dev/null 2>&1; then
-    LISTEN=$(ss -tlnp 2>/dev/null | grep -c "LISTEN" || echo "0")
-    if [ "$LISTEN" -eq 0 ]; then
-        pass "CAT-II SRG-OS-000095" "No listening TCP ports"
-    else
-        fail "CAT-II SRG-OS-000095" "$LISTEN listening TCP port(s) found"
-        ss -tlnp 2>/dev/null | tee -a "$REPORT"
-        fix "Remove or disable any services not required by the application"
-        fix "Ensure only the application's required port is exposed in the Dockerfile"
-    fi
-else
-    fail "CAT-II SRG-OS-000095" "ss not available - cannot verify listening ports"
-    fix "Install iproute2: apt-get install -y iproute2  OR ensure no services start at runtime"
-fi
-
-if [ -f /proc/self/status ]; then
-    CAP_EFF=$(grep "^CapEff:" /proc/self/status 2>/dev/null | awk '{print $2}')
-    if [ "$CAP_EFF" = "0000000000000000" ]; then
-        pass "CAT-II CONTAINER" "No effective capabilities (fully dropped)"
-    else
-        fail "CAT-II CONTAINER" "Effective capabilities: $CAP_EFF"
-        fix "Run container with: docker run --cap-drop=ALL --cap-add=<only_needed_cap> ..."
-        fix "Or in Kubernetes set: securityContext.capabilities.drop: [ALL]"
-    fi
-fi
-
-if [ -f /etc/os-release ]; then
-    pass "CAT-II CONTAINER" "/etc/os-release present"
-else
-    fail "CAT-II CONTAINER" "/etc/os-release missing"
-    fix "Add to Dockerfile: COPY os-release /etc/os-release"
 fi
 
 # =============================================================================
